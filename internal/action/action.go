@@ -5,11 +5,13 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/semaphore"
 )
 
 type Config struct {
+	AcquireTimeout  time.Duration
 	GlobalSemaphore *semaphore.Weighted
 	LocalSemaphore  int64
 	Type            string

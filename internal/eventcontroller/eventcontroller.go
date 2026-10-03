@@ -39,15 +39,15 @@ func parseConfig(data string) ([]Rule, error) {
 		return nil, err
 	}
 	seen := make(map[string]bool)
+	unique := make(map[struct{ Inbound, Outbound event.Event }]bool)
 	var rules []Rule
 	for _, rule := range config.Events {
 		if rule.Disabled {
 			continue
 		}
-		if rule.Name == "" || seen[rule.Name] {
+		if rule.Name == "" {
 			return nil, fmt.Errorf("missing or duplicate event name %q", rule.Name)
 		}
-		seen[rule.Name] = true
 		if _, ok := informers.Resource(rule.Inbound.Kind); !ok {
 			return nil, fmt.Errorf("event %s: unsupported kind %q", rule.Name, rule.Inbound.Kind)
 		}
@@ -68,6 +68,24 @@ func parseConfig(data string) ([]Rule, error) {
 		default:
 			return nil, fmt.Errorf("event %s: unsupported outbound kind %q", rule.Name, rule.Outbound.Kind)
 		}
+		// Names identify rules; behavior determines whether a rule is redundant.
+		rule.Inbound.Kind = strings.ToLower(rule.Inbound.Kind)
+		rule.Inbound.Action = strings.ToLower(rule.Inbound.Action)
+		selector, _ := labels.Parse(rule.Inbound.Label)
+		rule.Inbound.Label = selector.String()
+		rule.Outbound.Kind = strings.ToLower(rule.Outbound.Kind)
+		if rule.Outbound.Kind == "cmd" {
+			rule.Outbound.Kind = "command"
+		}
+		rule.Outbound.Action = strings.TrimSpace(rule.Outbound.Action)
+		identity := struct{ Inbound, Outbound event.Event }{rule.Inbound, rule.Outbound}
+		if unique[identity] {
+			continue
+		}
+		if seen[rule.Name] {
+			return nil, fmt.Errorf("duplicate event name %q", rule.Name)
+		}
+		seen[rule.Name], unique[identity] = true, true
 		rules = append(rules, rule)
 	}
 	return rules, nil
@@ -77,6 +95,7 @@ func env(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
+
 	return fallback
 }
 
@@ -87,12 +106,14 @@ func Start(ctx context.Context, cancelParent context.CancelFunc) {
 		cancelParent()
 		return
 	}
+
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		logger.Error("failed to create kubernetes client", "error", err)
 		cancelParent()
 		return
 	}
+
 	if err := run(ctx, client, env("CONFIGMAP_NAMESPACE", "default"), env("CONFIGMAP_NAME", "keda-config"), env("CONFIGMAP_KEY", "config.yaml")); err != nil {
 		logger.Error("controller failed", "error", err)
 		cancelParent()
@@ -117,14 +138,19 @@ func runWithRules(ctx context.Context, client kubernetes.Interface, namespace, n
 		return err
 	}
 	defer shutdown()
-	ruleCtx, stop := context.WithCancel(ctx)
-	done := make(chan struct{})
-	start := func() {
-		activeCtx, activeDone, activeRules := ruleCtx, done, rules
-		go func() { defer close(activeDone); execute(activeCtx, client, activeRules) }()
+	// Each runner owns its context and completion channel. Stop waits for all
+	// informers and actions before the next configuration starts.
+	start := func(rules []Rule) func() {
+		ruleCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			execute(ruleCtx, client, rules)
+		}()
+		return func() { cancel(); <-done }
 	}
-	start()
-	defer func() { stop(); <-done }()
+	stop := start(rules)
+	defer func() { stop() }()
 	current := cm.Data[key]
 	for {
 		select {
@@ -140,19 +166,16 @@ func runWithRules(ctx context.Context, client kubernetes.Interface, namespace, n
 				continue
 			}
 			stop()
-			<-done
-			rules, current = next, cm.Data[key]
-			ruleCtx, stop = context.WithCancel(ctx)
-			done = make(chan struct{})
-			start()
-			logger.Info("configuration reloaded", "events", len(rules))
+			stop = start(next)
+			current = cm.Data[key]
+			logger.Info("configuration reloaded", "events", len(next))
 		}
 	}
 }
 
 func configRules(cm *corev1.ConfigMap, key string) ([]Rule, error) {
-	data, ok := cm.Data[key]
-	if !ok || strings.TrimSpace(data) == "" {
+	data := cm.Data[key]
+	if strings.TrimSpace(data) == "" {
 		return nil, fmt.Errorf("ConfigMap %s/%s missing nonempty key %q", cm.Namespace, cm.Name, key)
 	}
 	return parseConfig(data)
@@ -160,23 +183,24 @@ func configRules(cm *corev1.ConfigMap, key string) ([]Rule, error) {
 
 func runRules(ctx context.Context, client kubernetes.Interface, rules []Rule) {
 	messages := make(chan informers.Message, 100)
-	errors := make(chan error, 100)
 	var workers sync.WaitGroup
 	defer workers.Wait()
-	limit := semaphore.NewWeighted(5)
+	settings := action.ConcurrencyFromEnv()
+	limit := semaphore.NewWeighted(settings.Max)
+	var jobs action.Jobs
 	byName := make(map[string]Rule)
 	for _, rule := range rules {
 		byName[rule.Name] = rule
 		workers.Go(func() {
-			informers.CreateAndRun(ctx, client, rule.Inbound.Kind, rule.Inbound.Action, rule.Inbound.Label, rule.Inbound.Namespace, rule.Name, messages, errors)
+			if err := informers.CreateAndRun(ctx, client, rule.Inbound.Kind, rule.Inbound.Action, rule.Inbound.Label, rule.Inbound.Namespace, rule.Name, messages); err != nil {
+				logger.Error("informer error", "event", rule.Name, "error", err)
+			}
 		})
 	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case err := <-errors:
-			logger.Error("informer error", "error", err)
 		case msg := <-messages:
 			rule := byName[msg.Key]
 			l := logger.With("event", rule.Name, "name", msg.Name, "namespace", msg.Namespace)
@@ -185,14 +209,19 @@ func runRules(ctx context.Context, client kubernetes.Interface, rules []Rule) {
 				continue
 			}
 			command := strings.TrimSpace(rule.Outbound.Action)
-			if strings.HasSuffix(command, ";") {
-				command = strings.TrimSuffix(command, ";")
+			if before, ok := strings.CutSuffix(command, ";"); ok {
+				command = before
 			} else {
 				command += " " + shellQuote(msg.Name) + " " + shellQuote(msg.Namespace)
 			}
-			runner, _ := action.NewCommandAction(action.Config{CTX: ctx, Logger: *l, GlobalSemaphore: limit})
+			key := action.JobKey{Rule: rule.Name, Name: msg.Name, Namespace: msg.Namespace}
+			if !jobs.Claim(key) {
+				l.Debug("duplicate job skipped")
+				continue
+			}
+			runner, _ := action.NewCommandAction(action.Config{CTX: ctx, Logger: *l, GlobalSemaphore: limit, AcquireTimeout: settings.Timeout})
 			runner.Args = command
-			workers.Go(runner.Do)
+			workers.Go(func() { defer jobs.Release(key); runner.Do() })
 		}
 	}
 }

@@ -3,12 +3,12 @@ package eventcontroller
 import (
 	"context"
 	"fmt"
-	"k8s.io/client-go/kubernetes"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -24,6 +24,7 @@ func TestParseConfig(t *testing.T) {
 		{"unknown field", `evnts: []`, 0, true},
 		{"missing name", `events: [{inbound: {kind: pod, action: create}}]`, 0, true},
 		{"unknown kind", `events: [{name: one, inbound: {kind: nope, action: create}}]`, 0, true},
+		{"unsupported informer", `events: [{name: one, inbound: {kind: verticalpodautoscaler, action: create}, outbound: {kind: nil}}]`, 0, true},
 		{"bad action", `events: [{name: one, inbound: {kind: pod, action: read}}]`, 0, true},
 		{"bad outbound", `events: [{name: one, inbound: {kind: pod, action: create}, outbound: {kind: nope}}]`, 0, true},
 		{"empty command", `events: [{name: one, inbound: {kind: pod, action: create}, outbound: {kind: cmd}}]`, 0, true},
@@ -41,7 +42,7 @@ func TestParseConfig(t *testing.T) {
 }
 
 func TestConfigMapLifecycle(t *testing.T) {
-	client := fake.NewClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "default"}, Data: map[string]string{"config.yaml": "events: []"}})
+	client := fake.NewClientset(&corev1.ConfigMap{Name: "config", Namespace: "default", Data: map[string]string{"config.yaml": "events: []"}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, client, "default", "config", "config.yaml") }()
@@ -90,7 +91,7 @@ func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 	configuration := func(command string) string {
 		return fmt.Sprintf("events: [{name: pods, inbound: {kind: pod, action: create}, outbound: {kind: cmd, action: %s}}]", command)
 	}
-	client := fake.NewClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "default"}, Data: map[string]string{"config.yaml": configuration("first")}})
+	client := fake.NewClientset(&corev1.ConfigMap{Name: "config", Namespace: "default", Data: map[string]string{"config.yaml": configuration("first")}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	transitions := make(chan string, 10)
@@ -142,5 +143,39 @@ func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("shutdown blocked")
+	}
+}
+
+func TestDuplicateRules(t *testing.T) {
+	rules, err := parseConfig(`events:
+- name: first
+  inbound: {kind: Pod, action: create, label: "b=2,a=1"}
+  outbound: {kind: cmd, action: "echo hello"}
+- name: second
+  inbound: {kind: pod, action: CREATE, label: "a=1,b=2"}
+  outbound: {kind: command, action: " echo hello "}
+- name: first
+  inbound: {kind: pod, action: create, label: "a=1,b=2"}
+  outbound: {kind: cmd, action: "echo hello"}
+- name: different-action
+  inbound: {kind: pod, action: create, label: "a=1,b=2"}
+  outbound: {kind: cmd, action: "echo other"}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 2 || rules[0].Name != "first" || rules[1].Name != "different-action" {
+		t.Fatalf("rules = %+v", rules)
+	}
+	_, err = parseConfig(`events:
+- name: same
+  inbound: {kind: pod, action: create}
+  outbound: {kind: cmd, action: echo}
+- name: same
+  inbound: {kind: pod, action: delete}
+  outbound: {kind: cmd, action: echo}
+`)
+	if err == nil {
+		t.Fatal("conflicting rules with same name accepted")
 	}
 }

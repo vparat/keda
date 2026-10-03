@@ -59,7 +59,6 @@ var (
 		"clusterrolebinding": {Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterrolebindings"},
 
 		"horizontalpodautoscaler":        {Group: "autoscaling", Version: "v1", Resource: "horizontalpodautoscalers"},
-		"verticalpodautoscaler":          {Group: "autoscaling.k8s.io", Version: "v1", Resource: "verticalpodautoscalers"},
 		"poddisruptionbudget":            {Group: "policy", Version: "v1", Resource: "poddisruptionbudgets"},
 		"priorityclass":                  {Group: "scheduling.k8s.io", Version: "v1", Resource: "priorityclasses"},
 		"storageclass":                   {Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"},
@@ -68,15 +67,8 @@ var (
 		"csinode":                        {Group: "storage.k8s.io", Version: "v1", Resource: "csinodes"},
 		"runtimeclass":                   {Group: "node.k8s.io", Version: "v1", Resource: "runtimeclasses"},
 		"lease":                          {Group: "coordination.k8s.io", Version: "v1", Resource: "leases"},
-		"customresourcedefinition":       {Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"},
 		"mutatingwebhookconfiguration":   {Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"},
 		"validatingwebhookconfiguration": {Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"},
-		"apiservice":                     {Group: "apiregistration.k8s.io", Version: "v1", Resource: "apiservices"},
-		"tokenreview":                    {Group: "authentication.k8s.io", Version: "v1", Resource: "tokenreviews"},
-		"selfsubjectaccessreview":        {Group: "authorization.k8s.io", Version: "v1", Resource: "selfsubjectaccessreviews"},
-		"subjectaccessreview":            {Group: "authorization.k8s.io", Version: "v1", Resource: "subjectaccessreviews"},
-		"localsubjectaccessreview":       {Group: "authorization.k8s.io", Version: "v1", Resource: "localsubjectaccessreviews"},
-		"selfsubjectrulesreview":         {Group: "authorization.k8s.io", Version: "v1", Resource: "selfsubjectrulesreviews"},
 		"ingressclass":                   {Group: "networking.k8s.io", Version: "v1", Resource: "ingressclasses"},
 		"podtemplate":                    {Group: "", Version: "v1", Resource: "podtemplates"},
 		"componentstatus":                {Group: "", Version: "v1", Resource: "componentstatuses"},
@@ -89,7 +81,7 @@ func Resource(kind string) (schema.GroupVersionResource, bool) {
 }
 
 func createInformer(kind string, i informers.SharedInformerFactory) (cache.SharedIndexInformer, error) {
-	gvr, ok := kindToGVR[strings.ToLower(kind)]
+	gvr, ok := Resource(kind)
 	if !ok {
 		return nil, fmt.Errorf("unsupported kind: %s", kind)
 	}
@@ -102,28 +94,18 @@ func createInformer(kind string, i informers.SharedInformerFactory) (cache.Share
 	return genericInformer.Informer(), nil
 }
 
-func newMessage(kind, action, name, namespace string) Message {
-	return Message{
-		Key:       fmt.Sprintf("%s:%s:%s:%s", kind, action, name, namespace),
-		Name:      name,
-		Namespace: namespace,
-	}
-}
-
 // CreateAndRun starts an informer for the given kind and forwards events
-// matching the action to out until informerLife is closed.
-func CreateAndRun(ctx context.Context, client kubernetes.Interface, kind, action, labels, namespace, name string, out chan<- Message, errChan chan<- error) {
-	factory := informers.NewSharedInformerFactoryWithOptions(client, resync, informers.WithNamespace(namespace), informers.WithTweakListOptions(func(opts *metav1.ListOptions) { opts.LabelSelector = labels }))
+// matching the action to out until ctx is canceled.
+func CreateAndRun(ctx context.Context, client kubernetes.Interface, kind, action, labels, namespace, name string, out chan<- Message) error {
+	factory := informers.NewSharedInformerFactoryWithOptions(client, resync,
+		informers.WithNamespace(namespace),
+		informers.WithTweakListOptions(func(opts *metav1.ListOptions) {
+			opts.LabelSelector = labels
+		}),
+	)
 	si, err := createInformer(kind, factory)
-	report := func(err error) {
-		select {
-		case errChan <- err:
-		case <-ctx.Done():
-		}
-	}
 	if err != nil {
-		report(err)
-		return
+		return err
 	}
 	emit := func(obj any) {
 		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
@@ -133,8 +115,7 @@ func CreateAndRun(ctx context.Context, client kubernetes.Interface, kind, action
 		if !ok {
 			return
 		}
-		msg := newMessage(kind, action, o.GetName(), o.GetNamespace())
-		msg.Key = name
+		msg := Message{Key: name, Name: o.GetName(), Namespace: o.GetNamespace()}
 		select {
 		case out <- msg:
 		case <-ctx.Done():
@@ -155,15 +136,11 @@ func CreateAndRun(ctx context.Context, client kubernetes.Interface, kind, action
 	case "delete":
 		handler.DeleteFunc = emit
 	default:
-		report(fmt.Errorf("invalid action: %s", action))
-		return
+		return fmt.Errorf("invalid action: %s", action)
 	}
 	if _, err := si.AddEventHandler(handler); err != nil {
-		report(err)
-		return
+		return err
 	}
-	factory.Start(ctx.Done())
-	factory.WaitForCacheSync(ctx.Done())
-	<-ctx.Done()
-	factory.Shutdown()
+	si.Run(ctx.Done())
+	return nil
 }

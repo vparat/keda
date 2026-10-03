@@ -13,15 +13,14 @@ import (
 var (
 	defaultSemaphoreLimit = 5
 	semaphoreTimeout      = 5 * time.Minute
-	hasSeparator          = false
 )
 
 type Command struct {
-	Logger slog.Logger
-	ctx    context.Context
-	Args   string
-	m      sync.Mutex
-	// jobs           map[string]struct{}
+	Logger         slog.Logger
+	ctx            context.Context
+	acquireTimeout time.Duration
+	Args           string
+	m              sync.Mutex
 	s              *semaphore.Weighted
 	semaphoreLimit int64
 }
@@ -30,8 +29,12 @@ func NewCommandAction(c Config) (*Command, error) {
 	cmd := &Command{
 		Logger:         c.Logger,
 		ctx:            c.CTX,
+		acquireTimeout: c.AcquireTimeout,
 		s:              c.GlobalSemaphore,
 		semaphoreLimit: c.LocalSemaphore,
+	}
+	if cmd.acquireTimeout <= 0 {
+		cmd.acquireTimeout = semaphoreTimeout
 	}
 	cmd.s = cmd.semaphore()
 	return cmd, nil
@@ -43,7 +46,11 @@ func (c *Command) Do() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.context(), semaphoreTimeout)
+	timeout := c.acquireTimeout
+	if timeout <= 0 {
+		timeout = semaphoreTimeout
+	}
+	ctx, cancel := context.WithTimeout(c.context(), timeout)
 	defer cancel()
 
 	if err := c.semaphore().Acquire(ctx, 1); err != nil {
@@ -52,7 +59,9 @@ func (c *Command) Do() {
 	}
 	defer c.semaphore().Release(1)
 
-	out, err := exec.CommandContext(c.context(), "sh", "-c", c.Args).CombinedOutput()
+	command := exec.CommandContext(c.context(), "sh", "-c", c.Args)
+	command.WaitDelay = time.Second
+	out, err := command.CombinedOutput()
 	if err != nil {
 		c.Logger.Error("command failed", "args", c.Args, "error", err, "output", string(out))
 		return
