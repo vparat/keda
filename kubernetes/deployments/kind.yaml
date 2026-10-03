@@ -47,6 +47,12 @@ spec:
           imagePullPolicy: Always
           # command: [ "tail","-f","/dev/null"]
           env:
+            - name: CONFIGMAP_NAME
+              value: keda-config
+            - name: CONFIGMAP_NAMESPACE
+              value: default
+            - name: CONFIGMAP_KEY
+              value: config.yaml
             - name: GOOGLE_CLOUD_PROFILING
               value: ""
             - name: RESYNC_TIME_DURATION
@@ -72,111 +78,20 @@ spec:
               memory: 512Mi
           volumeMounts: []
 
-# apiVersion: v1
-# data:
-#   config.yaml: |
-#     events:
-#       - name: default-deployment-update
-#         disabled: false
-#         inbound:
-#           kind: deployment
-#           action: update
-#           namespace: "default"
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash /home/scripts/kubeclarity-cli-scanner/kubeclarity-cli-scanner.sh deployment"
-#       - name: default-statefulset-update
-#         disabled: false
-#         inbound:
-#           kind: statefulset
-#           action: update
-#           namespace: default
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash /home/scripts/kubeclarity-cli-scanner/kubeclarity-cli-scanner.sh statefulset"
-#       - name: default-daemonset-update
-#         disabled: false
-#         inbound:
-#           kind: daemonset
-#           action: update
-#           namespace: "default"
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash /home/scripts/kubeclarity-cli-scanner/kubeclarity-cli-scanner.sh daemonset"
-#       - name: default-deployment-create
-#         disabled: false
-#         inbound:
-#           kind: deployment
-#           action: create
-#           namespace: "default"
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash /home/scripts/kubeclarity-cli-scanner/kubeclarity-cli-scanner.sh deployment"
-#       - name: default-deployment-create
-#         disabled: false
-#         inbound:
-#           kind: deployment
-#           action: create
-#           namespace: "default"
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash /home/scripts/kubeclarity-cli-scanner/kubeclarity-cli-scanner.sh deployment"
-#       - name: default-statefulset-create
-#         disabled: false
-#         inbound:
-#           kind: statefulset
-#           action: create
-#           namespace: default
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash /home/scripts/kubeclarity-cli-scanner/kubeclarity-cli-scanner.sh statefulset"
-#       - name: default-statefulset-create
-#         disabled: false
-#         inbound:
-#           kind: statefulset
-#           action: create
-#           namespace: default
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash /home/scripts/kubeclarity-cli-scanner/kubeclarity-cli-scanner.sh statefulset"
-#       - name: service-update-get-external-ip
-#         disabled: false
-#         inbound:
-#           kind: service
-#           action: "update"
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash /home/scripts/serviceips/serviceips.sh"
-#       - name: disabled-event-example
-#         disabled: true
-#         inbound:
-#           kind: deployment
-#           action: create
-#           namespace: "default"
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash echo \"this event is disabled\""
-#       - name: node-create
-#         disabled: false
-#         inbound:
-#           kind: node
-#           action: create
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash echo \"node create\""
-#       - name: node-delete
-#         disabled: false
-#         inbound:
-#           kind: node
-#           action: delete
-#         outbound:
-#           kind: cmd
-#           action: "/bin/bash echo \"node delete\""
-# kind: ConfigMap
-# metadata:
-#   name: keda-config
-#   namespace: default
-#   labels:
-#     k8s-app: keda
-#     app.default.com/name: keda
-#     app.kubernetes.io/part-of: default
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keda-config
+  namespace: default
+data:
+  config.yaml: |
+    events:
+      - name: pod-created
+        inbound:
+          kind: pod
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo pod-created"

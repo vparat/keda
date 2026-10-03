@@ -1,16 +1,15 @@
 package informers
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -84,28 +83,9 @@ var (
 	}
 )
 
-func authenticate() (*kubernetes.Clientset, error) {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, err
-	}
-	// k8s Auth
-	return kubernetes.NewForConfig(config)
-}
-
-func createFactory(labels, namespace string) (informers.SharedInformerFactory, error) {
-	clientset, err := authenticate()
-	if err != nil {
-		return nil, err
-	}
-
-	opts := func(opts *metav1.ListOptions) {
-		if labels != "" {
-			opts.LabelSelector = labels
-		}
-	}
-
-	return informers.NewSharedInformerFactoryWithOptions(clientset, resync, informers.WithNamespace(namespace), informers.WithTweakListOptions(opts)), nil
+func Resource(kind string) (schema.GroupVersionResource, bool) {
+	gvr, ok := kindToGVR[strings.ToLower(kind)]
+	return gvr, ok
 }
 
 func createInformer(kind string, i informers.SharedInformerFactory) (cache.SharedIndexInformer, error) {
@@ -132,56 +112,58 @@ func newMessage(kind, action, name, namespace string) Message {
 
 // CreateAndRun starts an informer for the given kind and forwards events
 // matching the action to out until informerLife is closed.
-func CreateAndRun(kind, action, labels, namespace, name string, out chan Message, errChan chan error, informerLife chan struct{}) {
-	informerFactory, err := createFactory(labels, namespace)
+func CreateAndRun(ctx context.Context, client kubernetes.Interface, kind, action, labels, namespace, name string, out chan<- Message, errChan chan<- error) {
+	factory := informers.NewSharedInformerFactoryWithOptions(client, resync, informers.WithNamespace(namespace), informers.WithTweakListOptions(func(opts *metav1.ListOptions) { opts.LabelSelector = labels }))
+	si, err := createInformer(kind, factory)
+	report := func(err error) {
+		select {
+		case errChan <- err:
+		case <-ctx.Done():
+		}
+	}
 	if err != nil {
-		errChan <- err
+		report(err)
 		return
 	}
-	si, err := createInformer(kind, informerFactory)
-	if err != nil {
-		errChan <- err
-		return
+	emit := func(obj any) {
+		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+			obj = tombstone.Obj
+		}
+		o, ok := obj.(metav1.Object)
+		if !ok {
+			return
+		}
+		msg := newMessage(kind, action, o.GetName(), o.GetNamespace())
+		msg.Key = name
+		select {
+		case out <- msg:
+		case <-ctx.Done():
+		}
 	}
-
 	handler := cache.ResourceEventHandlerFuncs{}
-
 	switch strings.ToLower(action) {
 	case "create":
-		handler.AddFunc = func(obj any) {
-			o := obj.(metav1.Object)
-			out <- newMessage(kind, action, o.GetName(), o.GetNamespace())
-		}
+		handler.AddFunc = emit
 	case "update":
-		handler.UpdateFunc = func(_, newObj any) {
-			o := newObj.(metav1.Object)
-			out <- newMessage(kind, action, o.GetName(), o.GetNamespace())
+		handler.UpdateFunc = func(oldObj, newObj any) {
+			old, ok := oldObj.(metav1.Object)
+			next, nextOK := newObj.(metav1.Object)
+			if ok && nextOK && old.GetResourceVersion() != next.GetResourceVersion() {
+				emit(newObj)
+			}
 		}
 	case "delete":
-		handler.DeleteFunc = func(obj any) {
-			o := obj.(metav1.Object)
-			out <- newMessage(kind, action, o.GetName(), o.GetNamespace())
-		}
+		handler.DeleteFunc = emit
 	default:
-		errChan <- fmt.Errorf("invalid action: %s", action)
+		report(fmt.Errorf("invalid action: %s", action))
 		return
 	}
-
 	if _, err := si.AddEventHandler(handler); err != nil {
-		errChan <- err
+		report(err)
 		return
 	}
-
-	log.Debug().Msgf("create informer kind=%s action=%s -n %s", kind, action, namespace)
-	informerFactory.Start(informerLife)
-	informerFactory.WaitForCacheSync(informerLife)
-}
-
-// RegisterCRD registers a custom resource to watch dynamically.
-func RegisterCRD(kind, group, version, resource string) {
-	kindToGVR[strings.ToLower(kind)] = schema.GroupVersionResource{
-		Group:    group,
-		Version:  version,
-		Resource: resource,
-	}
+	factory.Start(ctx.Done())
+	factory.WaitForCacheSync(ctx.Done())
+	<-ctx.Done()
+	factory.Shutdown()
 }
