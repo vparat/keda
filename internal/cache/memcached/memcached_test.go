@@ -3,7 +3,7 @@ package memcached
 import (
 	"bufio"
 	"bytes"
-	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,7 +12,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/bradfitz/gomemcache/memcache"
 )
+
 
 type fakeItem struct {
 	value  []byte
@@ -20,48 +23,72 @@ type fakeItem struct {
 	expiry int64
 }
 
+
 type fakeServer struct {
 	mu   sync.Mutex
 	data map[string]*fakeItem
 }
 
+
 func newFakeServer() *fakeServer {
+
 	return &fakeServer{data: make(map[string]*fakeItem)}
 }
 
+
 func (f *fakeServer) expired(it *fakeItem, now int64) bool {
+
 	return it.expiry > 0 && it.expiry <= now
 }
 
+
+// handler implements the subset of the text protocol exercised by cache tests.
+// It buffers each response so network writes happen outside the store lock.
 func (f *fakeServer) handler(conn net.Conn) {
+	// Closing a completed test connection requires no further recovery.
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
-	writer := bufio.NewWriter(conn)
 
 	for {
 		line, err := reader.ReadString('\n')
+
 		if err != nil {
+
 			return
 		}
+
 		line = strings.TrimRight(line, "\r\n")
 		parts := strings.Split(line, " ")
 		now := time.Now().Unix()
+
+		// bytes.Buffer writes cannot fail; only the final network copy can fail.
+		var writer bytes.Buffer
 
 		switch parts[0] {
 		case "set":
 			size, err := strconv.Atoi(parts[4])
 			if err != nil {
+
 				return
 			}
 			body := make([]byte, size+2)
 			if _, err := io.ReadFull(reader, body); err != nil {
+
 				return
 			}
-			expiry, _ := strconv.ParseInt(parts[3], 10, 64)
+			expiry, err := strconv.ParseInt(parts[3], 10, 64)
+			if err != nil {
+
+				return
+			}
 			if expiry > 0 {
 				expiry += now
 			}
-			flags, _ := strconv.ParseUint(parts[2], 10, 32)
+			flags, err := strconv.ParseUint(parts[2], 10, 32)
+			if err != nil {
+
+				return
+			}
 			f.mu.Lock()
 			f.data[parts[1]] = &fakeItem{value: body[:size], flags: uint32(flags), expiry: expiry}
 			f.mu.Unlock()
@@ -71,15 +98,24 @@ func (f *fakeServer) handler(conn net.Conn) {
 			f.mu.Lock()
 			for _, key := range parts[1:] {
 				it, ok := f.data[key]
+
 				if ok && f.expired(it, now) {
 					delete(f.data, key)
 					ok = false
 				}
+
 				if ok {
-					fmt.Fprintf(writer, "VALUE %s %d %d\r\n", key, it.flags, len(it.value))
+					fmt.Fprintf(
+						&writer,
+						"VALUE %s %d %d\r\n",
+						key,
+						it.flags,
+						len(it.value),
+					)
 					writer.Write(it.value)
 					writer.WriteString("\r\n")
 				}
+
 			}
 			f.mu.Unlock()
 			writer.WriteString("END\r\n")
@@ -98,40 +134,56 @@ func (f *fakeServer) handler(conn net.Conn) {
 			writer.WriteString("ERROR\r\n")
 		}
 
-		if err := writer.Flush(); err != nil {
+		if _, err := io.Copy(conn, &writer); err != nil {
+
 			return
 		}
+
 	}
+
 }
+
 
 func (f *fakeServer) serve(t *testing.T) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
+
 	if err != nil {
 		t.Fatalf("fake memcached server failed to listen: %v", err)
 	}
-	t.Cleanup(func() { listener.Close() })
+
+	t.Cleanup(func() {
+		// Closing the listener stops the accept loop, including on test failure.
+		listener.Close()
+	})
 
 	go func() {
+
 		for {
 			conn, err := listener.Accept()
+
 			if err != nil {
+
 				return
 			}
+
 			go f.handler(conn)
 		}
+
 	}()
 
 	return listener.Addr().String()
 }
 
+
 func TestMemcachedCacheSetGet(t *testing.T) {
 	cache, err := New([]string{newFakeServer().serve(t)}, 0)
+
 	if err != nil {
 		t.Fatalf("New() unexpected error: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	key := "foo"
 	value := []byte("bar")
 
@@ -140,6 +192,7 @@ func TestMemcachedCacheSetGet(t *testing.T) {
 	}
 
 	got, err := cache.Get(ctx, key)
+
 	if err != nil {
 		t.Fatalf("Get() unexpected error: %v", err)
 	}
@@ -147,26 +200,32 @@ func TestMemcachedCacheSetGet(t *testing.T) {
 	if !bytes.Equal(got, value) {
 		t.Errorf("Get() = %q, want %q", got, value)
 	}
+
 }
+
 
 func TestMemcachedCacheGetMissingKey(t *testing.T) {
 	cache, err := New([]string{newFakeServer().serve(t)}, 0)
+
 	if err != nil {
 		t.Fatalf("New() unexpected error: %v", err)
 	}
 
-	if _, err := cache.Get(context.Background(), "missing"); err == nil {
-		t.Error("Get() expected error for missing key, got nil")
+	if _, err := cache.Get(t.Context(), "missing"); !errors.Is(err, memcache.ErrCacheMiss) {
+		t.Errorf("Get() error = %v, want %v", err, memcache.ErrCacheMiss)
 	}
+
 }
+
 
 func TestMemcachedCacheDelete(t *testing.T) {
 	cache, err := New([]string{newFakeServer().serve(t)}, 0)
+
 	if err != nil {
 		t.Fatalf("New() unexpected error: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	key := "foo"
 
 	if err := cache.Set(ctx, key, []byte("bar")); err != nil {
@@ -180,15 +239,18 @@ func TestMemcachedCacheDelete(t *testing.T) {
 	if _, err := cache.Get(ctx, key); err == nil {
 		t.Error("Get() expected error after delete, got nil")
 	}
+
 }
+
 
 func TestMemcachedCacheTTL(t *testing.T) {
 	cache, err := New([]string{newFakeServer().serve(t)}, 1*time.Second)
+
 	if err != nil {
 		t.Fatalf("New() unexpected error: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	key := "foo"
 
 	if err := cache.Set(ctx, key, []byte("bar")); err != nil {
@@ -200,10 +262,14 @@ func TestMemcachedCacheTTL(t *testing.T) {
 	if _, err := cache.Get(ctx, key); err == nil {
 		t.Error("Get() expected error after TTL expiry, got nil")
 	}
+
 }
 
+
 func TestNewNoHosts(t *testing.T) {
+
 	if _, err := New(nil, 0); err == nil {
 		t.Error("New() expected error for empty hosts, got nil")
 	}
+
 }

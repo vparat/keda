@@ -53,8 +53,6 @@ spec:
               value: default
             - name: CONFIGMAP_KEY
               value: config.yaml
-            - name: GOOGLE_CLOUD_PROFILING
-              value: ""
             - name: RESYNC_TIME_DURATION
               value: "1440m"
             - name: CLUSTER_NAME

@@ -10,25 +10,42 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+
 // Every kind accepted during configuration validation must have an informer.
 func TestSupportedKindsHaveInformers(t *testing.T) {
 	factory := kinformers.NewSharedInformerFactory(fake.NewClientset(), 0)
+
 	for kind := range kindToGVR {
 		t.Run(kind, func(t *testing.T) {
+
 			if _, err := createInformer(kind, factory); err != nil {
 				t.Fatal(err)
 			}
+
 		})
 	}
+
 }
+
 
 func TestCreateAndRun(t *testing.T) {
 	client := fake.NewClientset(&corev1.Pod{Name: "example", Namespace: "default"})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	messages := make(chan Message)
 	done := make(chan error, 1)
-	go func() { done <- CreateAndRun(ctx, client, "pod", "create", "", "default", "pod-created", messages) }()
+	go func() {
+		done <- CreateAndRun(
+			ctx,
+			client,
+			"pod",
+			"create",
+			"",
+			"default",
+			"pod-created",
+			messages,
+		)
+	}()
 	select {
 	case got := <-messages:
 		want := Message{Key: "pod-created", Name: "example", Namespace: "default"}
@@ -49,12 +66,29 @@ func TestCreateAndRun(t *testing.T) {
 	}
 }
 
+
 func TestCreateAndRunInvalidConfiguration(t *testing.T) {
-	for _, tt := range []struct{ kind, action string }{{"unknown", "create"}, {"pod", "unknown"}} {
+
+	for _, tt := range []struct{ kind, action string }{
+		{kind: "unknown", action: "create"},
+		{kind: "pod", action: "unknown"},
+	} {
 		t.Run(tt.kind+"/"+tt.action, func(t *testing.T) {
-			if err := CreateAndRun(context.Background(), fake.NewClientset(), tt.kind, tt.action, "", "", "rule", nil); err == nil {
+
+			if err := CreateAndRun(
+				t.Context(),
+				fake.NewClientset(),
+				tt.kind,
+				tt.action,
+				"",
+				"",
+				"rule",
+				nil,
+			); err == nil {
 				t.Fatal("expected configuration error")
 			}
+
 		})
 	}
+
 }

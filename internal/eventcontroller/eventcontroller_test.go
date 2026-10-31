@@ -12,52 +12,122 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+
 func TestParseConfig(t *testing.T) {
+
 	for _, tt := range []struct {
 		name, data string
 		count      int
 		fail       bool
 	}{
-		{"valid", `events: [{name: one, inbound: {kind: pod, action: create}, outbound: {kind: cmd, action: echo}}]`, 1, false},
-		{"disabled", `events: [{disabled: true}]`, 0, false},
-		{"empty rules", `events: []`, 0, false},
-		{"unknown field", `evnts: []`, 0, true},
-		{"missing name", `events: [{inbound: {kind: pod, action: create}}]`, 0, true},
-		{"unknown kind", `events: [{name: one, inbound: {kind: nope, action: create}}]`, 0, true},
-		{"unsupported informer", `events: [{name: one, inbound: {kind: verticalpodautoscaler, action: create}, outbound: {kind: nil}}]`, 0, true},
-		{"bad action", `events: [{name: one, inbound: {kind: pod, action: read}}]`, 0, true},
-		{"bad outbound", `events: [{name: one, inbound: {kind: pod, action: create}, outbound: {kind: nope}}]`, 0, true},
-		{"empty command", `events: [{name: one, inbound: {kind: pod, action: create}, outbound: {kind: cmd}}]`, 0, true},
+		{
+			name:  "valid",
+			data:  `events: [{name: one, inbound: {kind: pod, action: create}, outbound: {kind: cmd, action: echo}}]`,
+			count: 1,
+			fail:  false,
+		},
+		{name: "disabled", data: `events: [{disabled: true}]`, count: 0, fail: false},
+		{name: "empty rules", data: `events: []`, count: 0, fail: false},
+		{name: "unknown field", data: `evnts: []`, count: 0, fail: true},
+		{
+			name:  "missing name",
+			data:  `events: [{inbound: {kind: pod, action: create}}]`,
+			count: 0,
+			fail:  true,
+		},
+		{
+			name:  "unknown kind",
+			data:  `events: [{name: one, inbound: {kind: nope, action: create}}]`,
+			count: 0,
+			fail:  true,
+		},
+		{
+			name:  "unsupported informer",
+			data:  `events: [{name: one, inbound: {kind: verticalpodautoscaler, action: create}, outbound: {kind: nil}}]`,
+			count: 0,
+			fail:  true,
+		},
+		{
+			name:  "bad action",
+			data:  `events: [{name: one, inbound: {kind: pod, action: read}}]`,
+			count: 0,
+			fail:  true,
+		},
+		{
+			name:  "bad outbound",
+			data:  `events: [{name: one, inbound: {kind: pod, action: create}, outbound: {kind: nope}}]`,
+			count: 0,
+			fail:  true,
+		},
+		{
+			name:  "empty command",
+			data:  `events: [{name: one, inbound: {kind: pod, action: create}, outbound: {kind: cmd}}]`,
+			count: 0,
+			fail:  true,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			rules, err := parseConfig(tt.data)
+
 			if (err != nil) != tt.fail {
-				t.Fatalf("error = %v", err)
+				t.Fatalf(
+					"parseConfig(%q) error = %v, want failure = %v",
+					tt.data,
+					err,
+					tt.fail,
+				)
 			}
+
 			if len(rules) != tt.count {
-				t.Fatalf("rules = %d", len(rules))
+				t.Fatalf(
+					"len(parseConfig(%q)) = %d, want %d",
+					tt.data,
+					len(rules),
+					tt.count,
+				)
 			}
+
 		})
 	}
+
 }
 
+
 func TestConfigMapLifecycle(t *testing.T) {
-	client := fake.NewClientset(&corev1.ConfigMap{Name: "config", Namespace: "default", Data: map[string]string{"config.yaml": "events: []"}})
-	ctx, cancel := context.WithCancel(context.Background())
+	client := fake.NewClientset(&corev1.ConfigMap{
+		Name:      "config",
+		Namespace: "default",
+		Data:      map[string]string{"config.yaml": "events: []"},
+	})
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- run(ctx, client, "default", "config", "config.yaml") }()
+	go func() {
+		done <- run(
+			ctx,
+			client,
+			"default",
+			"config",
+			"config.yaml",
+		)
+	}()
 	// Wait until the configuration informer is watching before changing the map.
 	deadline := time.After(5 * time.Second)
+
 	for {
-		watching := false
+		var watching bool
+
 		for _, action := range client.Actions() {
+
 			if action.GetVerb() == "watch" {
 				watching = true
 			}
+
 		}
+
 		if watching {
 			break
 		}
+
 		select {
 		case <-deadline:
 			cancel()
@@ -65,11 +135,19 @@ func TestConfigMapLifecycle(t *testing.T) {
 		case <-time.After(time.Millisecond):
 		}
 	}
-	cm, _ := client.CoreV1().ConfigMaps("default").Get(ctx, "config", metav1.GetOptions{})
+
+	cm, err := client.CoreV1().ConfigMaps("default").Get(ctx, "config", metav1.GetOptions{})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cm.Data["config.yaml"] = "events: [{disabled: true}]"
+
 	if _, err := client.CoreV1().ConfigMaps("default").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
+
 	cancel()
 	select {
 	case err := <-done:
@@ -81,18 +159,29 @@ func TestConfigMapLifecycle(t *testing.T) {
 	}
 }
 
+
 func TestMissingConfigKey(t *testing.T) {
+
 	if _, err := configRules(&corev1.ConfigMap{}, "config.yaml"); err == nil {
 		t.Fatal("expected missing key error")
 	}
+
 }
+
 
 func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 	configuration := func(command string) string {
-		return fmt.Sprintf("events: [{name: pods, inbound: {kind: pod, action: create}, outbound: {kind: cmd, action: %s}}]", command)
+		const configFormat = "events: [{name: pods, inbound: {kind: pod, action: create}, " +
+			"outbound: {kind: cmd, action: %s}}]"
+
+		return fmt.Sprintf(configFormat, command)
 	}
-	client := fake.NewClientset(&corev1.ConfigMap{Name: "config", Namespace: "default", Data: map[string]string{"config.yaml": configuration("first")}})
-	ctx, cancel := context.WithCancel(context.Background())
+	client := fake.NewClientset(&corev1.ConfigMap{
+		Name:      "config",
+		Namespace: "default",
+		Data:      map[string]string{"config.yaml": configuration("first")},
+	})
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	transitions := make(chan string, 10)
 	execute := func(ctx context.Context, _ kubernetes.Interface, rules []Rule) {
@@ -102,7 +191,16 @@ func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 		transitions <- "stop:" + command
 	}
 	done := make(chan error, 1)
-	go func() { done <- runWithRules(ctx, client, "default", "config", "config.yaml", execute) }()
+	go func() {
+		done <- runWithRules(
+			ctx,
+			client,
+			"default",
+			"config",
+			"config.yaml",
+			execute,
+		)
+	}()
 	expect := func(want string) {
 		t.Helper()
 		select {
@@ -117,13 +215,17 @@ func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 	update := func(data string) {
 		t.Helper()
 		cm, err := client.CoreV1().ConfigMaps("default").Get(ctx, "config", metav1.GetOptions{})
+
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		cm.Data["config.yaml"] = data
+
 		if _, err := client.CoreV1().ConfigMaps("default").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 			t.Fatal(err)
 		}
+
 	}
 	expect("start:first")
 	update(configuration("second"))
@@ -146,6 +248,7 @@ func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 	}
 }
 
+
 func TestDuplicateRules(t *testing.T) {
 	rules, err := parseConfig(`events:
 - name: first
@@ -161,12 +264,19 @@ func TestDuplicateRules(t *testing.T) {
   inbound: {kind: pod, action: create, label: "a=1,b=2"}
   outbound: {kind: cmd, action: "echo other"}
 `)
+
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 2 || rules[0].Name != "first" || rules[1].Name != "different-action" {
+
+	if len(rules) != 2 {
+		t.Fatalf("len(parseConfig(...)) = %d, want 2", len(rules))
+	}
+
+	if rules[0].Name != "first" || rules[1].Name != "different-action" {
 		t.Fatalf("rules = %+v", rules)
 	}
+
 	_, err = parseConfig(`events:
 - name: same
   inbound: {kind: pod, action: create}
@@ -175,7 +285,9 @@ func TestDuplicateRules(t *testing.T) {
   inbound: {kind: pod, action: delete}
   outbound: {kind: cmd, action: echo}
 `)
+
 	if err == nil {
 		t.Fatal("conflicting rules with same name accepted")
 	}
+
 }

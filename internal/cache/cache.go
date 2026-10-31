@@ -1,3 +1,4 @@
+// Package cache constructs interchangeable cache backends.
 package cache
 
 import (
@@ -16,13 +17,18 @@ var (
 	_ Cacher = new(memcached.MemcachedCache)
 )
 
+
+// Cacher stores, retrieves, and deletes values by key.
 type Cacher interface {
 	Set(ctx context.Context, key string, value []byte) error
 	Get(ctx context.Context, key string) ([]byte, error)
 	Delete(ctx context.Context, key string) error
 }
 
+
+// New constructs the selected cache backend with the supplied hosts and TTL.
 func New(t string, hosts []string, ttl time.Duration) (Cacher, error) {
+
 	switch t {
 	case "redis":
 		return redis.New(hosts, ttl)
@@ -31,6 +37,7 @@ func New(t string, hosts []string, ttl time.Duration) (Cacher, error) {
 	case "noop":
 		return noop.New(hosts, ttl)
 	default:
-		return nil, fmt.Errorf("%s", "invalid cache type")
+		return nil, fmt.Errorf("invalid cache type %q", t)
 	}
+
 }

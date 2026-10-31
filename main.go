@@ -1,3 +1,4 @@
+// The keda command watches Kubernetes resources and executes configured actions.
 package main
 
 import (
@@ -6,27 +7,30 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/vparat/keda/internal/eventcontroller"
 )
 
-const sleepDuration = 5
+// Version is the application version supplied at build time.
+var Version string
 
-var (
-	Version string
-)
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	defer cancel()
-	go eventcontroller.Start(ctx, cancel)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		eventcontroller.Start(ctx, cancel)
+	}()
 
 	<-ctx.Done()
-	slog.Info("\nShutting down...")
-	time.Sleep(sleepDuration * time.Second)
+	slog.Info("Shutting down")
+	<-done
+
 	if cause := context.Cause(ctx); cause != nil {
 		slog.Debug("stopping", "reason", cause)
 	}
+
 }
