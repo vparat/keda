@@ -194,9 +194,11 @@ func TestCommandCancellationStopsProcess(t *testing.T) {
 			t.Fatal("Do() did not start the command")
 		case <-tick.C:
 		}
+
 	}
 
 	cancel()
+
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):

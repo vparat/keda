@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -o /home/keda
 
 FROM alpine:${alpine_version}
 
-RUN apk update && apk add --no-cache jq kubectl && apk upgrade --no-cache && rm -rf /var/cache/apk/*
+RUN apk update && apk add --no-cache bash jq kubectl && apk upgrade --no-cache && rm -rf /var/cache/apk/*
 
 COPY --from=builder /home/keda /keda
 

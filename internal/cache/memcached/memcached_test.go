@@ -31,13 +31,11 @@ type fakeServer struct {
 
 
 func newFakeServer() *fakeServer {
-
 	return &fakeServer{data: make(map[string]*fakeItem)}
 }
 
 
 func (f *fakeServer) expired(it *fakeItem, now int64) bool {
-
 	return it.expiry > 0 && it.expiry <= now
 }
 
@@ -53,7 +51,6 @@ func (f *fakeServer) handler(conn net.Conn) {
 		line, err := reader.ReadString('\n')
 
 		if err != nil {
-
 			return
 		}
 
@@ -67,28 +64,33 @@ func (f *fakeServer) handler(conn net.Conn) {
 		switch parts[0] {
 		case "set":
 			size, err := strconv.Atoi(parts[4])
-			if err != nil {
 
+			if err != nil {
 				return
 			}
+
 			body := make([]byte, size+2)
+
 			if _, err := io.ReadFull(reader, body); err != nil {
-
 				return
 			}
+
 			expiry, err := strconv.ParseInt(parts[3], 10, 64)
-			if err != nil {
 
+			if err != nil {
 				return
 			}
+
 			if expiry > 0 {
 				expiry += now
 			}
-			flags, err := strconv.ParseUint(parts[2], 10, 32)
-			if err != nil {
 
+			flags, err := strconv.ParseUint(parts[2], 10, 32)
+
+			if err != nil {
 				return
 			}
+
 			f.mu.Lock()
 			f.data[parts[1]] = &fakeItem{value: body[:size], flags: uint32(flags), expiry: expiry}
 			f.mu.Unlock()
@@ -96,6 +98,7 @@ func (f *fakeServer) handler(conn net.Conn) {
 
 		case "get", "gets":
 			f.mu.Lock()
+
 			for _, key := range parts[1:] {
 				it, ok := f.data[key]
 
@@ -117,17 +120,20 @@ func (f *fakeServer) handler(conn net.Conn) {
 				}
 
 			}
+
 			f.mu.Unlock()
 			writer.WriteString("END\r\n")
 
 		case "delete":
 			f.mu.Lock()
+
 			if _, ok := f.data[parts[1]]; ok {
 				delete(f.data, parts[1])
 				writer.WriteString("DELETED\r\n")
 			} else {
 				writer.WriteString("NOT_FOUND\r\n")
 			}
+
 			f.mu.Unlock()
 
 		default:
@@ -135,7 +141,6 @@ func (f *fakeServer) handler(conn net.Conn) {
 		}
 
 		if _, err := io.Copy(conn, &writer); err != nil {
-
 			return
 		}
 
@@ -163,7 +168,6 @@ func (f *fakeServer) serve(t *testing.T) string {
 			conn, err := listener.Accept()
 
 			if err != nil {
-
 				return
 			}
 
@@ -270,6 +274,46 @@ func TestNewNoHosts(t *testing.T) {
 
 	if _, err := New(nil, 0); err == nil {
 		t.Error("New() expected error for empty hosts, got nil")
+	}
+
+}
+
+
+// TestMemcachedCacheInvalidKey checks wrapped client errors for invalid keys.
+// It receives the test handle and returns no values.
+func TestMemcachedCacheInvalidKey(t *testing.T) {
+	cache, err := New([]string{"localhost:11211"}, 0)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "set", call: func() error {
+			return cache.Set(t.Context(), "invalid key", []byte("value"))
+		}},
+		{name: "get", call: func() error {
+			_, err := cache.Get(t.Context(), "invalid key")
+
+			return err
+		}},
+		{name: "delete", call: func() error {
+			return cache.Delete(t.Context(), "invalid key")
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+
+			if !errors.Is(err, memcache.ErrMalformedKey) || !strings.Contains(err.Error(), "memcached "+tt.name) {
+				t.Fatalf("operation error = %v; want wrapped malformed key error", err)
+			}
+
+		})
 	}
 
 }

@@ -1,0 +1,151 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keda-sa
+  namespace: default
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: keda-binding
+subjects:
+  - kind: ServiceAccount
+    name: keda-sa
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: keda
+  namespace: default
+  labels:
+    k8s-app: keda
+    app.kubernetes.io/name: keda
+    app.kubernetes.io/part-of: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: keda
+  template:
+    metadata:
+      labels:
+        k8s-app: keda
+        app.default.com/name: keda
+        app.kubernetes.io/name: keda
+        app.kubernetes.io/part-of: default
+    spec:
+      serviceAccountName: keda-sa
+      containers:
+        - name: keda
+          image: keda:7db833e
+          imagePullPolicy: Never
+          # command: [ "tail","-f","/dev/null"]
+          env:
+            - name: CONFIGMAP_NAME
+              value: keda-config
+            - name: CONFIGMAP_NAMESPACE
+              value: default
+            - name: CONFIGMAP_KEY
+              value: config.yaml
+            - name: RESYNC_TIME_DURATION
+              value: "1440m"
+            - name: CLUSTER_NAME
+              value: "kind-kind"
+            - name: CMDRUNNER_SEMAPHORE_MAX
+              value: "5"
+            - name: CMDRUNNER_SEMAPHORE_TIMEOUT
+              value: "20m"
+            - name: LOG_LEVEL
+              value: "debug"
+            - name: "CACHE_TYPE"
+              value: "redis"
+            - name: "CACHE_TTL"
+              value: "14400m"
+            - name: "CACHE_HOST"
+              value: "redis-service:6379"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 1500m
+              memory: 512Mi
+          volumeMounts:
+            - name: allowed-deployment-scripts
+              mountPath: /home/scripts
+              readOnly: true
+      volumes:
+        - name: allowed-deployment-scripts
+          configMap:
+            name: keda-allowed-deployment-scripts
+            defaultMode: 0555
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keda-config
+  namespace: default
+data:
+  config.yaml: |
+    events:
+      - name: check-allowed-deployments
+        inbound:
+          kind: deployment
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: '/home/scripts/check-allowed-deployments.sh deployment'
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keda-allowed-deployment-scripts
+  namespace: default
+data:
+  check-allowed-deployments.sh: |
+    #!/bin/bash
+
+    set -euo pipefail
+
+    if [[ $# -ne 3 || -z $2 || -z $3 ]]; then
+        echo "Usage: $0 <kind> <name> <namespace>" >&2
+        exit 1
+    fi
+
+    kind="$1"
+    name="$2"
+    namespace="$3"
+
+    # Add the deployment names that should be kept to this static list.
+    allowed_deployments=(
+        "keda"
+        "redis"
+        "test-allowed-1"
+        "test-allowed-2"
+    )
+
+    if [[ $kind != "deployment" ]]; then
+        exit 0
+    fi
+
+    if [[ ${#allowed_deployments[@]} -eq 0 ]]; then
+        echo "Configure allowed_deployments before deleting deployments." >&2
+        exit 1
+    fi
+
+    for allowed_name in "${allowed_deployments[@]}"; do
+        if [[ $name == "$allowed_name" ]]; then
+            echo "Deployment $name is in the allowlist"
+            exit 0
+        fi
+    done
+    echo "Deployment $name is not in the allowlist; deleting..."
+    kubectl delete deployment "$name" --namespace "$namespace" --ignore-not-found

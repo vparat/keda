@@ -12,7 +12,6 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-
 func TestParseConfig(t *testing.T) {
 
 	for _, tt := range []struct {
@@ -102,7 +101,7 @@ func TestConfigMapLifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- run(
+		done <- newController().run(
 			ctx,
 			client,
 			"default",
@@ -110,6 +109,7 @@ func TestConfigMapLifecycle(t *testing.T) {
 			"config.yaml",
 		)
 	}()
+
 	// Wait until the configuration informer is watching before changing the map.
 	deadline := time.After(5 * time.Second)
 
@@ -134,6 +134,7 @@ func TestConfigMapLifecycle(t *testing.T) {
 			t.Fatal("watch did not start")
 		case <-time.After(time.Millisecond):
 		}
+
 	}
 
 	cm, err := client.CoreV1().ConfigMaps("default").Get(ctx, "config", metav1.GetOptions{})
@@ -149,14 +150,18 @@ func TestConfigMapLifecycle(t *testing.T) {
 	}
 
 	cancel()
+
 	select {
 	case err := <-done:
+
 		if err != nil {
 			t.Fatal(err)
 		}
+
 	case <-time.After(5 * time.Second):
 		t.Fatal("shutdown blocked")
 	}
+
 }
 
 
@@ -192,25 +197,30 @@ func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- runWithRules(
+		c := newController()
+		c.execute = execute
+		done <- c.run(
 			ctx,
 			client,
 			"default",
 			"config",
 			"config.yaml",
-			execute,
 		)
 	}()
 	expect := func(want string) {
 		t.Helper()
+
 		select {
 		case got := <-transitions:
+
 			if got != want {
 				t.Fatalf("transition = %q, want %q", got, want)
 			}
+
 		case <-time.After(5 * time.Second):
 			t.Fatalf("waiting for %s", want)
 		}
+
 	}
 	update := func(data string) {
 		t.Helper()
@@ -233,19 +243,24 @@ func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 	expect("start:second")
 	update("events: [{name: invalid}]")
 	update(configuration("third"))
+
 	// Invalid configuration must not stop or replace the second runner.
 	expect("stop:second")
 	expect("start:third")
 	cancel()
 	expect("stop:third")
+
 	select {
 	case err := <-done:
+
 		if err != nil {
 			t.Fatal(err)
 		}
+
 	case <-time.After(5 * time.Second):
 		t.Fatal("shutdown blocked")
 	}
+
 }
 
 

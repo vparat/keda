@@ -4,9 +4,11 @@ package informers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	datacache "github.com/vparat/keda/internal/cache"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/informers"
@@ -16,6 +18,7 @@ import (
 
 const resync = 10 * time.Minute
 
+var dataStore datacache.Cacher
 
 // Message is emitted when an informer observes a change.
 type Message struct {
@@ -83,7 +86,6 @@ var kindToGVR = map[string]schema.GroupVersionResource{
 	"componentstatus": {Group: "", Version: "v1", Resource: "componentstatuses"},
 }
 
-
 // Resource resolves a case-insensitive resource kind to its API resource.
 func Resource(kind string) (schema.GroupVersionResource, bool) {
 	gvr, ok := kindToGVR[strings.ToLower(kind)]
@@ -91,27 +93,57 @@ func Resource(kind string) (schema.GroupVersionResource, bool) {
 	return gvr, ok
 }
 
+func SetDataStore(c datacache.Cacher) {
+	dataStore = c
+}
+
+func proceed(ctx context.Context, key, value string) bool {
+	logger := slog.Default().With("component", "informer")
+
+	if dataStore == nil {
+		return true
+	}
+
+	if key == "" || value == "" {
+		logger.Info("key or value empty")
+		return true
+	}
+
+	if data, err := dataStore.Get(ctx, key); err == nil {
+		if string(data) == value {
+			logger.Debug(fmt.Sprintf("skipping event %s=%s", key, value))
+			return false
+		}
+	}
+
+	if err := dataStore.Set(ctx, key, []byte(value)); err != nil {
+		logger.Error(fmt.Sprintf("error setting data store: %s", err.Error()))
+	}
+
+	logger.Debug(fmt.Sprintf("proceeding with event %s=%s", key, value))
+
+	return true
+}
 
 // createInformer resolves kind through the factory so API resources share its
 // namespace, selector, and resync settings.
-func createInformer(kind string, factory informers.SharedInformerFactory) (cache.SharedIndexInformer, error) {
+func createInformer(kind string, factory interface {
+	ForResource(schema.GroupVersionResource) (informers.GenericInformer, error)
+}) (cache.SharedIndexInformer, error) {
 	gvr, ok := Resource(kind)
 
 	if !ok {
-
 		return nil, fmt.Errorf("unsupported kind: %q", kind)
 	}
 
 	genericInformer, err := factory.ForResource(gvr)
 
 	if err != nil {
-
 		return nil, fmt.Errorf("failed to create informer for %q: %w", kind, err)
 	}
 
 	return genericInformer.Informer(), nil
 }
-
 
 // CreateAndRun starts an informer for the given kind and forwards events
 // matching the action to out until ctx is canceled.
@@ -136,10 +168,22 @@ func CreateAndRun(
 	informer, err := createInformer(kind, factory)
 
 	if err != nil {
-
 		return err
 	}
 
+	return runInformer(ctx, informer, kind, action, name, out)
+}
+
+// runInformer registers the named action on informer and forwards matching objects
+// to out until ctx is canceled. It returns registration or action errors.
+func runInformer(
+	ctx context.Context,
+	informer cache.SharedIndexInformer,
+	kind string,
+	action string,
+	name string,
+	out chan<- Message,
+) error {
 	emit := func(obj any) {
 
 		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
@@ -147,17 +191,20 @@ func CreateAndRun(
 		}
 
 		object, ok := obj.(metav1.Object)
-
 		if !ok {
-
 			return
 		}
 
-		msg := Message{Key: name, Name: object.GetName(), Namespace: object.GetNamespace()}
-		select {
-		case out <- msg:
-		case <-ctx.Done():
+		key := fmt.Sprintf("%s:%s:%s:%s:%s", kind, action, string(object.GetName()), string(object.GetNamespace()), name)
+		if proceed(ctx, key, string(object.GetResourceVersion())) {
+			msg := Message{Key: name, Name: object.GetName(), Namespace: object.GetNamespace()}
+
+			select {
+			case out <- msg:
+			case <-ctx.Done():
+			}
 		}
+
 	}
 	handler := cache.ResourceEventHandlerFuncs{}
 
@@ -170,7 +217,6 @@ func CreateAndRun(
 			next, nextOK := newObj.(metav1.Object)
 
 			if !ok || !nextOK {
-
 				return
 			}
 
@@ -186,7 +232,6 @@ func CreateAndRun(
 	}
 
 	if _, err := informer.AddEventHandler(handler); err != nil {
-
 		return fmt.Errorf("register %q handler for %q: %w", action, kind, err)
 	}
 

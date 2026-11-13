@@ -1,0 +1,30 @@
+ARG alpine_version=latest
+ARG golang_version=1.27
+
+FROM gcr.io/google.com/cloudsdktool/google-cloud-cli:alpine AS gcloud
+
+FROM golang:${golang_version}-alpine${alpine_version} AS builder
+
+WORKDIR $GOPATH/src/github.com/vparat/keda
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o /home/keda
+
+FROM alpine:${alpine_version}
+
+RUN apk update && apk add --no-cache bash ca-certificates jq kubectl python3 && apk upgrade --no-cache && rm -rf /var/cache/apk/*
+
+COPY --from=gcloud /google-cloud-sdk /opt/google-cloud-sdk
+ENV PATH="/opt/google-cloud-sdk/bin:${PATH}" \
+    CLOUDSDK_PYTHON=/usr/bin/python3
+
+COPY --from=builder /home/keda /keda
+
+RUN adduser  -D -h /home/keda -u 1001 -s /sbin/nologin  keda
+RUN mkdir -p /home/workdir/ && chown -R keda:keda /home/workdir
+WORKDIR /home/workdir
+USER keda
+
+RUN bash --version && gcloud --version && kubectl version --client=true
+
+ENTRYPOINT ["/keda"]

@@ -11,31 +11,25 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-
 // Config configures action execution and concurrency limits.
 type Config struct {
 	AcquireTimeout  time.Duration
 	GlobalSemaphore *semaphore.Weighted
-	LocalSemaphore  int64
 	Type            string
 	Logger          slog.Logger
 }
-
 
 // Action performs an outbound operation.
 type Action interface {
 	Do(ctx context.Context)
 }
 
-
 // New returns a no-op action.
 func New() (Action, error) {
-
 	return NewWithConfig(Config{
 		Type: "nil",
 	})
 }
-
 
 // NewWithConfig constructs the action selected by c.Type.
 func NewWithConfig(c Config) (Action, error) {

@@ -3,7 +3,6 @@ package cache
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/vparat/keda/internal/cache/memcached"
@@ -17,14 +16,12 @@ var (
 	_ Cacher = new(memcached.MemcachedCache)
 )
 
-
 // Cacher stores, retrieves, and deletes values by key.
 type Cacher interface {
 	Set(ctx context.Context, key string, value []byte) error
 	Get(ctx context.Context, key string) ([]byte, error)
 	Delete(ctx context.Context, key string) error
 }
-
 
 // New constructs the selected cache backend with the supplied hosts and TTL.
 func New(t string, hosts []string, ttl time.Duration) (Cacher, error) {
@@ -35,9 +32,9 @@ func New(t string, hosts []string, ttl time.Duration) (Cacher, error) {
 	case "memcached":
 		return memcached.New(hosts, ttl)
 	case "noop":
-		return noop.New(hosts, ttl)
+		fallthrough
 	default:
-		return nil, fmt.Errorf("invalid cache type %q", t)
+		return noop.New(hosts, ttl)
 	}
 
 }

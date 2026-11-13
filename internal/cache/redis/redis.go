@@ -11,7 +11,7 @@ import (
 )
 
 
-// RedisCache implements the redis cache backend.
+// RedisCache implements the Redis cache backend.
 type RedisCache struct {
 	client goredis.UniversalClient
 	ttl    time.Duration
@@ -22,7 +22,6 @@ type RedisCache struct {
 func New(hosts []string, ttl time.Duration) (RedisCache, error) {
 
 	if len(hosts) == 0 {
-
 		return RedisCache{}, errors.New("no redis hosts provided")
 	}
 
@@ -46,7 +45,6 @@ func (r RedisCache) Set(ctx context.Context, key string, value []byte) error {
 		value,
 		r.ttl,
 	).Err(); err != nil {
-
 		return fmt.Errorf("redis set %q: %w", key, err)
 	}
 
@@ -59,7 +57,6 @@ func (r RedisCache) Get(ctx context.Context, key string) ([]byte, error) {
 	value, err := r.client.Get(ctx, key).Bytes()
 
 	if err != nil {
-
 		return nil, fmt.Errorf("redis get %q: %w", key, err)
 	}
 
@@ -71,7 +68,6 @@ func (r RedisCache) Get(ctx context.Context, key string) ([]byte, error) {
 func (r RedisCache) Delete(ctx context.Context, key string) error {
 
 	if err := r.client.Del(ctx, key).Err(); err != nil {
-
 		return fmt.Errorf("redis delete %q: %w", key, err)
 	}
 

@@ -1,0 +1,135 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keda-sa
+  namespace: default
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: keda-binding
+subjects:
+  - kind: ServiceAccount
+    name: keda-sa
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: keda
+  namespace: default
+  labels:
+    k8s-app: keda
+    app.kubernetes.io/name: keda
+    app.kubernetes.io/part-of: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: keda
+  template:
+    metadata:
+      labels:
+        k8s-app: keda
+        app.default.com/name: keda
+        app.kubernetes.io/name: keda
+        app.kubernetes.io/part-of: default
+    spec:
+      serviceAccountName: keda-sa
+      containers:
+        - name: keda
+          image: keda:7db833e
+          imagePullPolicy: Never
+          # command: [ "tail","-f","/dev/null"]
+          env:
+            - name: CONFIGMAP_NAME
+              value: keda-config
+            - name: CONFIGMAP_NAMESPACE
+              value: default
+            - name: CONFIGMAP_KEY
+              value: config.yaml
+            - name: RESYNC_TIME_DURATION
+              value: "1440m"
+            - name: CLUSTER_NAME
+              value: "kind-kind"
+            - name: CMDRUNNER_SEMAPHORE_MAX
+              value: "5"
+            - name: CMDRUNNER_SEMAPHORE_TIMEOUT
+              value: "20m"
+            - name: "CACHE_TYPE"
+              value: "noop"
+            - name: "CACHE_TTL"
+              value: "14400m"
+            - name: "CACHE_HOST"
+              value: "redis01:6379"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 1500m
+              memory: 512Mi
+          volumeMounts: []
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keda-config
+  namespace: default
+data:
+  config.yaml: |
+    events:
+      - name: pod-created
+        inbound:
+          kind: pod
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo pod-created"
+      - name: service-created
+        inbound:
+          kind: service
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo service-created"
+      - name: configmap-created
+        inbound:
+          kind: configmap
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo configmap-created"
+      - name: pod-deleted
+        inbound:
+          kind: pod
+          action: delete
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo pod-deleted"
+      - name: service-deleted
+        inbound:
+          kind: service
+          action: delete
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo service-deleted"
+      - name: configmap-deleted
+        inbound:
+          kind: configmap
+          action: delete
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo configmap-deleted"

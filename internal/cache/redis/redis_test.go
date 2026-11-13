@@ -3,6 +3,7 @@ package redis
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,50 @@ func TestNewNoHosts(t *testing.T) {
 
 	if _, err := New(nil, 0); err == nil {
 		t.Error("New() expected error for empty hosts, got nil")
+	}
+
+}
+
+
+// TestRedisCacheClosedClient checks that all operations preserve client failures.
+// It receives the test handle and returns no values.
+func TestRedisCacheClosedClient(t *testing.T) {
+	cache, err := New([]string{"localhost:6379"}, 0)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cache.client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "set", call: func() error {
+			return cache.Set(t.Context(), "key", []byte("value"))
+		}},
+		{name: "get", call: func() error {
+			_, err := cache.Get(t.Context(), "key")
+
+			return err
+		}},
+		{name: "delete", call: func() error {
+			return cache.Delete(t.Context(), "key")
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+
+			if !errors.Is(err, goredis.ErrClosed) || !strings.Contains(err.Error(), "redis "+tt.name) {
+				t.Fatalf("operation error = %v; want wrapped closed client error", err)
+			}
+
+		})
 	}
 
 }

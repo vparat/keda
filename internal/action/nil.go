@@ -14,7 +14,6 @@ type Nil struct {
 
 // NewNilAction constructs a no-op action using the configured logger.
 func NewNilAction(c Config) (*Nil, error) {
-
 	return &Nil{
 		Logger: c.Logger,
 	}, nil
