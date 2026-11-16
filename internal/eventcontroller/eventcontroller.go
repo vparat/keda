@@ -23,6 +23,9 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+const defaultConfig = "configmap"
+const defaultConfigOptions = "name:keda-config,namespace:default,key:config.yaml"
+
 // Rule connects an inbound resource event to an outbound action.
 type Rule struct {
 	Name     string      `json:"name"`
@@ -195,11 +198,10 @@ func (c *controller) start(ctx context.Context, cancelParent context.CancelFunc)
 func (c *controller) run(ctx context.Context, client kubernetes.Interface) error {
 	logger := slog.Default().With("component", "eventcontroller")
 	source := c.watchConfig
-
 	if source == nil {
 		var err error
-		cfg := configwatcher.NewConfig(env("CONFIGWATCHER_TYPE", "configmap"))
-		sourceOptions := util.StringToMap(env("CONFIGWATCHER_SOURCE_OPTIONS", ""))
+		cfg := configwatcher.NewConfig(env("CONFIGWATCHER_TYPE", defaultConfig))
+		sourceOptions := util.StringToMap(env("CONFIGWATCHER_SOURCE_OPTIONS", defaultConfigOptions))
 		if len(sourceOptions) == 0 {
 			return errors.New("invalid CONFIGWATCHER_SOURCE_OPTIONS")
 		}
@@ -210,7 +212,9 @@ func (c *controller) run(ctx context.Context, client kubernetes.Interface) error
 		if err != nil {
 			return err
 		}
+		slog.Debug("configwatcher", "type", cfg.Type)
 	}
+
 	updates, shutdown, err := source.Watch(ctx)
 
 	if err != nil {
