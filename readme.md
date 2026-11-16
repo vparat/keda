@@ -116,7 +116,10 @@ The container includes `kubectl` and `jq`. Commands that access Kubernetes use t
 
 ## Rule configuration
 
-By default, keda reads the `config.yaml` key of ConfigMap `default/keda-config`:
+The deployment examples set `CONFIGWATCHER_SOURCE_OPTIONS` to
+`namespace:default,name:keda-config,key:config.yaml`, which reads the `config.yaml`
+key of ConfigMap `default/keda-config`. Set these options explicitly; the source
+location has no default:
 
 ```yaml
 apiVersion: v1
@@ -172,9 +175,7 @@ The complete list and API versions are defined in [`kindToGVR`](internal/informe
 | Variable | Default | Description |
 | --- | --- | --- |
 | `CONFIGWATCHER_TYPE` | `configmap` | Configuration source; currently only `configmap` is supported. |
-| `CONFIGMAP_NAMESPACE` | `default` | Namespace containing the rule ConfigMap. |
-| `CONFIGMAP_NAME` | `keda-config` | Rule ConfigMap name. |
-| `CONFIGMAP_KEY` | `config.yaml` | Data key containing the rules. |
+| `CONFIGWATCHER_SOURCE_OPTIONS` | Empty (required) | Comma-separated `key:value` source options. ConfigMap requires `namespace`, `name`, and `key`, for example `namespace:default,name:keda-config,key:config.yaml`. |
 | `LOG_TYPE` | `json` | `json` or `text`, case insensitive. Unknown values use JSON. |
 | `LOG_LEVEL` | `info` | Minimum severity: `debug`, `info`, or `error`, case insensitive. Unknown values use `info`. |
 | `CMDRUNNER_SEMAPHORE_MAX` | `5` | Maximum concurrent commands across rules in one process. |
@@ -344,9 +345,19 @@ current rules, and unchanged bytes skip reloads. Unexpected stream closure stops
 the controller with an error. Cancellation joins the active rules and source workers.
 
 The default `configmap` source creates its own in-cluster Kubernetes client,
-reads the initial ConfigMap, and watches its selected `Data` key. Existing
-`CONFIGMAP_NAMESPACE`, `CONFIGMAP_NAME`, and `CONFIGMAP_KEY` settings still apply.
+reads the initial ConfigMap, and watches its selected `Data` key. Configure its
+location with `CONFIGWATCHER_SOURCE_OPTIONS`:
+
+```yaml
+env:
+  - name: CONFIGWATCHER_TYPE
+    value: configmap
+  - name: CONFIGWATCHER_SOURCE_OPTIONS
+    value: "namespace:default,name:keda-config,key:config.yaml"
+```
+
 `CONFIGWATCHER_TYPE` defaults to `configmap`; unsupported values fail startup.
+The `namespace`, `name`, and `key` options must all be nonempty.
 Deleting the ConfigMap retains the last rules until a valid replacement appears.
 
 To add another source, implement `Watcher` and register it in
