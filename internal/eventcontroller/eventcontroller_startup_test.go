@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -357,8 +358,10 @@ func TestRunSourceOptions(t *testing.T) {
 
 	for _, tt := range []struct {
 		name, options, message string
+		unset bool
 	}{
-		{name: "empty", message: "invalid CONFIGWATCHER_SOURCE_OPTIONS"},
+		{name: "unset uses defaults", unset: true, message: "failed to get in-cluster config"},
+		{name: "empty uses defaults", message: "failed to get in-cluster config"},
 		{name: "malformed", options: "missing-colon,:value,", message: "invalid CONFIGWATCHER_SOURCE_OPTIONS"},
 		{name: "missing name", options: "namespace:custom,key:events", message: "name is required"},
 		{name: "missing key", options: "namespace:custom,name:rules", message: "key is required"},
@@ -367,6 +370,13 @@ func TestRunSourceOptions(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("CONFIGWATCHER_SOURCE_OPTIONS", tt.options)
+
+			if tt.unset {
+				if err := os.Unsetenv("CONFIGWATCHER_SOURCE_OPTIONS"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
 			c := newController()
 			c.execute = func(context.Context, kubernetes.Interface, []Rule) {
 				t.Error("rules started after source setup failure")

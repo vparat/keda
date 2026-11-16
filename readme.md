@@ -116,10 +116,10 @@ The container includes `kubectl` and `jq`. Commands that access Kubernetes use t
 
 ## Rule configuration
 
-The deployment examples set `CONFIGWATCHER_SOURCE_OPTIONS` to
+The ConfigMap deployment examples set `CONFIGWATCHER_SOURCE_OPTIONS` to
 `namespace:default,name:keda-config,key:config.yaml`, which reads the `config.yaml`
-key of ConfigMap `default/keda-config`. Set these options explicitly; the source
-location has no default:
+key of ConfigMap `default/keda-config`. These are also the default options when the environment
+variable is unset or empty:
 
 ```yaml
 apiVersion: v1
@@ -174,8 +174,8 @@ The complete list and API versions are defined in [`kindToGVR`](internal/informe
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CONFIGWATCHER_TYPE` | `configmap` | Configuration source; currently only `configmap` is supported. |
-| `CONFIGWATCHER_SOURCE_OPTIONS` | Empty (required) | Comma-separated `key:value` source options. ConfigMap requires `namespace`, `name`, and `key`, for example `namespace:default,name:keda-config,key:config.yaml`. |
+| `CONFIGWATCHER_TYPE` | `configmap` | Configuration source; `configmap` or `file`. |
+| `CONFIGWATCHER_SOURCE_OPTIONS` | `name:keda-config,namespace:default,key:config.yaml` | Comma-separated `key:value` source options. ConfigMap requires `namespace`, `name`, and `key`, for example `namespace:default,name:keda-config,key:config.yaml`. |
 | `LOG_TYPE` | `json` | `json` or `text`, case insensitive. Unknown values use JSON. |
 | `LOG_LEVEL` | `info` | Minimum severity: `debug`, `info`, or `error`, case insensitive. Unknown values use `info`. |
 | `CMDRUNNER_SEMAPHORE_MAX` | `5` | Maximum concurrent commands across rules in one process. |
@@ -357,7 +357,10 @@ env:
 ```
 
 `CONFIGWATCHER_TYPE` defaults to `configmap`; unsupported values fail startup.
-The `namespace`, `name`, and `key` options must all be nonempty.
+The `namespace`, `name`, and `key` options must all be nonempty for ConfigMap.
+The [file source](internal/configwatcher/file/readme.md) uses
+`CONFIGWATCHER_TYPE=file` and `CONFIGWATCHER_SOURCE_OPTIONS=path:/home/config/rules.yaml`.
+It emits initial contents and watches writes, replacements, and symlink swaps.
 Deleting the ConfigMap retains the last rules until a valid replacement appears.
 
 To add another source, implement `Watcher` and register it in
@@ -380,5 +383,17 @@ an empty, writable map. Values cannot contain commas.
 
 Configuration source options are supplied through `CONFIGWATCHER_SOURCE_OPTIONS`,
 for example `namespace:default,name:keda-config,key:config.yaml` for ConfigMap.
-Empty or wholly malformed options fail startup; ConfigMap requires all three
-fields. Tests cover option parsing, required fields, and unsupported source types.
+Unset or empty options use the default ConfigMap location. Nonempty, wholly
+malformed options fail startup; explicit ConfigMap options require all three fields. Tests cover option parsing, required fields, and unsupported source types.
+
+### File watcher with Secret-mounted rules
+
+[kind-file-watcher.yaml](kubernetes/deployments/kind-file-watcher.yaml)
+uses `CONFIGWATCHER_TYPE=file` and reads `/home/config/config.yaml` from the
+`default/keda-config` Secret. The Secret contains the example event rules in
+`stringData.config.yaml`. Its volume mounts the entire `/home/config` directory
+read-only so projected Secret updates reach the file watcher through symlink
+swaps. The rules file is readable by the container's non-root user.
+
+Apply the manifest with an image that includes the file watcher. Update the Secret's rules and reapply to reload
+them after Kubernetes refreshes the mounted volume. No Pod restart is required.

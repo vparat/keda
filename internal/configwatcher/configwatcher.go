@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/vparat/keda/internal/configwatcher/configmap"
+	filesource "github.com/vparat/keda/internal/configwatcher/file"
 )
 
 // Config selects a source and supplies its Kubernetes client and location.
@@ -13,6 +14,7 @@ type Config struct {
 	Type    string
 	options map[string]string
 }
+
 
 func NewConfig(t string) Config {
 	c := Config{
@@ -22,13 +24,16 @@ func NewConfig(t string) Config {
 	return c
 }
 
+
 func (c Config) SetOption(k, v string) {
 	c.options[k] = v
 }
 
+
 func (c Config) WithOption(k string) string {
 	return c.options[k]
 }
+
 
 // Watcher produces configuration snapshots. Watch uses ctx for its lifetime and
 // returns a stream whose first value is the initial configuration, followed by
@@ -39,12 +44,16 @@ type Watcher interface {
 	Watch(ctx context.Context) (<-chan []byte, func(), error)
 }
 
+
 var _ Watcher = configmap.ConfigMap{}
+var _ Watcher = filesource.File{}
 
 // NewWithConfig returns the selected source, applying defaults to empty fields.
 // It returns an error for an unsupported type
 func NewWithConfig(c Config) (Watcher, error) {
 	switch c.Type {
+	case "file":
+		return filesource.New(c.WithOption("path"))
 	case "configmap":
 		c, err := configmap.New(
 			c.WithOption("namespace"),

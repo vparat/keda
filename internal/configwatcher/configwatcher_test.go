@@ -1,6 +1,7 @@
 package configwatcher
 
 import (
+	filesource "github.com/vparat/keda/internal/configwatcher/file"
 	"strings"
 	"testing"
 )
@@ -71,7 +72,7 @@ func TestConfigOptions(t *testing.T) {
 // TestConfigValuePassing verifies options survive passing Config by value.
 // It takes t and returns no values.
 func TestConfigValuePassing(t *testing.T) {
-	var config Config = NewConfig("configmap")
+	config := NewConfig("configmap")
 	config.SetOption("namespace", "custom")
 	config.SetOption("name", "rules")
 	config.SetOption("key", "events")
@@ -90,4 +91,26 @@ func TestConfigValuePassing(t *testing.T) {
 		}
 	}
 	check(config)
+}
+
+
+// TestFileSource checks file source construction and path validation using t.
+// It returns no values.
+func TestFileSource(t *testing.T) {
+	config := NewConfig("file")
+
+	if _, err := NewWithConfig(config); err == nil {
+		t.Fatal("file source accepted a missing path")
+	}
+	config.SetOption("path", "/home/config/rules.yaml")
+	source, err := NewWithConfig(config)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, ok := source.(filesource.File)
+
+	if !ok || file.Path != "/home/config/rules.yaml" {
+		t.Fatalf("file source = %#v", source)
+	}
 }

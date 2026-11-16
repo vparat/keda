@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/bradfitz/gomemcache v0.0.0-20260422231931-4d751bb6e37c
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/vparat/configmapwatcher v0.1.0
 	golang.org/x/sync v0.25.0

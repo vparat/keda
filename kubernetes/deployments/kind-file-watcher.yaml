@@ -1,0 +1,155 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keda-sa
+  namespace: default
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: keda-binding
+subjects:
+  - kind: ServiceAccount
+    name: keda-sa
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: keda
+  namespace: default
+  labels:
+    k8s-app: keda
+    app.kubernetes.io/name: keda
+    app.kubernetes.io/part-of: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: keda
+  template:
+    metadata:
+      labels:
+        k8s-app: keda
+        app.default.com/name: keda
+        app.kubernetes.io/name: keda
+        app.kubernetes.io/part-of: default
+    spec:
+      serviceAccountName: keda-sa
+      containers:
+        - name: keda
+          image: keda:a7fc430
+          imagePullPolicy: Never
+          # command: [ "tail","-f","/dev/null"]
+          env:
+            - name: CONFIGWATCHER_TYPE
+              value: "file"
+            - name: CONFIGWATCHER_SOURCE_OPTIONS
+              value: "path:/home/config/config.yaml"
+            - name: RESYNC_TIME_DURATION
+              value: "1440m"
+            - name: CLUSTER_NAME
+              value: "kind-kind"
+            - name: CMDRUNNER_SEMAPHORE_MAX
+              value: "5"
+            - name: CMDRUNNER_SEMAPHORE_TIMEOUT
+              value: "20m"
+            - name: LOG_LEVEL
+              value: "debug"
+            - name: "CACHE_TYPE"
+              value: "noop"
+            - name: "CACHE_TTL"
+              value: ""
+            - name: "CACHE_HOST"
+              value: ""
+          resources:
+            requests:
+              cpu: 10m
+              memory: 10Mi
+            limits:
+              cpu: 1000m
+              memory: 256Mi
+          volumeMounts:
+            - name: rule-config
+              mountPath: /home/config
+              readOnly: true
+      volumes:
+        - name: rule-config
+          secret:
+            secretName: keda-config
+            defaultMode: 0444
+            items:
+              - key: config.yaml
+                path: config.yaml
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keda-config
+  namespace: default
+type: Opaque
+stringData:
+  config.yaml: |
+    events:
+      - name: pod-created
+        inbound:
+          kind: pod
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo pod-created"
+      - name: service-created
+        inbound:
+          kind: service
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo service-created"
+      - name: configmap-created
+        inbound:
+          kind: configmap
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo configmap-created"
+      - name: pod-deleted
+        inbound:
+          kind: pod
+          action: delete
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo pod-deleted"
+      - name: service-deleted
+        inbound:
+          kind: service
+          action: delete
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo service-deleted"
+      - name: configmap-deleted
+        inbound:
+          kind: configmap
+          action: delete
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo configmap-deleted"
+      - name: namespace-created
+        inbound:
+          kind: namespace
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo namespace-created"

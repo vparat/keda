@@ -62,9 +62,9 @@ spec:
             - name: "CACHE_TYPE"
               value: "noop"
             - name: "CACHE_TTL"
-              value: "14400m"
+              value: ""
             - name: "CACHE_HOST"
-              value: "redis01:6379"
+              value: ""
           resources:
             requests:
               cpu: 10m
