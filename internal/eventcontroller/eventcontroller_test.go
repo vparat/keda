@@ -94,7 +94,6 @@ func TestParseConfig(t *testing.T) {
 
 
 func TestConfigMapLifecycle(t *testing.T) {
-	t.Setenv("CONFIGMAP_NAME", "config")
 	client := fake.NewClientset(&corev1.ConfigMap{
 		Name:      "config",
 		Namespace: "default",
@@ -176,7 +175,6 @@ func TestMissingConfigKey(t *testing.T) {
 
 
 func TestConfigMapReloadsRulesAndActions(t *testing.T) {
-	t.Setenv("CONFIGMAP_NAME", "config")
 	configuration := func(command string) string {
 		const configFormat = "events: [{name: pods, inbound: {kind: pod, action: create}, " +
 			"outbound: {kind: cmd, action: %s}}]"

@@ -84,9 +84,7 @@ func TestStartFailures(t *testing.T) {
 		{name: "controller", message: "controller failed", cfg: &rest.Config{Host: "http://127.0.0.1"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("CONFIGMAP_NAMESPACE", "custom-ns")
-			t.Setenv("CONFIGMAP_NAME", "custom-map")
-			t.Setenv("CONFIGMAP_KEY", "custom-key")
+			t.Setenv("CONFIGWATCHER_SOURCE_OPTIONS", "namespace:custom-ns,name:custom-map,key:custom-key")
 			var output bytes.Buffer
 			oldLogger := slog.Default()
 			slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
@@ -337,6 +335,7 @@ func TestRunCancellationBeforeSnapshot(t *testing.T) {
 // It takes t and returns no values.
 func TestRunUnsupportedSource(t *testing.T) {
 	t.Setenv("CONFIGWATCHER_TYPE", "unsupported")
+	t.Setenv("CONFIGWATCHER_SOURCE_OPTIONS", "namespace:default,name:rules,key:events")
 	c := newController()
 	c.execute = func(context.Context, kubernetes.Interface, []Rule) {
 		t.Error("unexpected rule execution")
@@ -345,5 +344,38 @@ func TestRunUnsupportedSource(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "unsupported configuration source") {
 		t.Fatalf("source selection error = %v", err)
+	}
+}
+
+
+// TestRunSourceOptions checks environment option parsing and constructor errors.
+// It takes t and returns no values.
+func TestRunSourceOptions(t *testing.T) {
+	t.Setenv("CONFIGWATCHER_TYPE", "configmap")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+
+	for _, tt := range []struct {
+		name, options, message string
+	}{
+		{name: "empty", message: "invalid CONFIGWATCHER_SOURCE_OPTIONS"},
+		{name: "malformed", options: "missing-colon,:value,", message: "invalid CONFIGWATCHER_SOURCE_OPTIONS"},
+		{name: "missing name", options: "namespace:custom,key:events", message: "name is required"},
+		{name: "missing key", options: "namespace:custom,name:rules", message: "key is required"},
+		{name: "missing namespace", options: "name:rules,key:events", message: "namespace is required"},
+		{name: "complete", options: " namespace : custom , name : rules , key : events ", message: "failed to get in-cluster config"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CONFIGWATCHER_SOURCE_OPTIONS", tt.options)
+			c := newController()
+			c.execute = func(context.Context, kubernetes.Interface, []Rule) {
+				t.Error("rules started after source setup failure")
+			}
+			err := c.run(t.Context(), nil)
+
+			if err == nil || !strings.Contains(err.Error(), tt.message) {
+				t.Fatalf("run error = %v, want %q", err, tt.message)
+			}
+		})
 	}
 }

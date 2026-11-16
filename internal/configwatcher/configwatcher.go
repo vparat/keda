@@ -10,10 +10,24 @@ import (
 
 // Config selects a source and supplies its Kubernetes client and location.
 type Config struct {
-	Type      string
-	Name      string
-	Key       string
-	Namespace string
+	Type    string
+	options map[string]string
+}
+
+func NewConfig(t string) Config {
+	c := Config{
+		Type:    t,
+		options: make(map[string]string),
+	}
+	return c
+}
+
+func (c Config) SetOption(k, v string) {
+	c.options[k] = v
+}
+
+func (c Config) WithOption(k string) string {
+	return c.options[k]
 }
 
 // Watcher produces configuration snapshots. Watch uses ctx for its lifetime and
@@ -32,7 +46,11 @@ var _ Watcher = configmap.ConfigMap{}
 func NewWithConfig(c Config) (Watcher, error) {
 	switch c.Type {
 	case "configmap":
-		c, err := configmap.New(c.Namespace, c.Name, c.Key)
+		c, err := configmap.New(
+			c.WithOption("namespace"),
+			c.WithOption("name"),
+			c.WithOption("key"),
+		)
 		if err != nil {
 			return nil, err
 		}

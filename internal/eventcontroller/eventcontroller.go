@@ -3,6 +3,7 @@ package eventcontroller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/vparat/keda/internal/configwatcher"
 	"github.com/vparat/keda/internal/event"
 	"github.com/vparat/keda/internal/informers"
+	"github.com/vparat/keda/internal/util"
 	"golang.org/x/sync/semaphore"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
@@ -196,12 +198,15 @@ func (c *controller) run(ctx context.Context, client kubernetes.Interface) error
 
 	if source == nil {
 		var err error
-		source, err = configwatcher.NewWithConfig(configwatcher.Config{
-			Type:      env("CONFIGWATCHER_TYPE", "configmap"),
-			Namespace: env("CONFIGMAP_NAMESPACE", "default"),
-			Name:      env("CONFIGMAP_NAME", "keda-config"),
-			Key:       env("CONFIGMAP_KEY", "config.yaml"),
-		})
+		cfg := configwatcher.NewConfig(env("CONFIGWATCHER_TYPE", "configmap"))
+		sourceOptions := util.StringToMap(env("CONFIGWATCHER_SOURCE_OPTIONS", ""))
+		if len(sourceOptions) == 0 {
+			return errors.New("invalid CONFIGWATCHER_SOURCE_OPTIONS")
+		}
+		for k, v := range sourceOptions {
+			cfg.SetOption(k, v)
+		}
+		source, err = configwatcher.NewWithConfig(cfg)
 		if err != nil {
 			return err
 		}

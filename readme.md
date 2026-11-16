@@ -354,3 +354,20 @@ To add another source, implement `Watcher` and register it in
 output stream when stopped, and provide an idempotent shutdown callback that
 cancels and joins those workers. No context is stored in source configuration;
 each call to `Watch` uses its supplied context.
+
+Source configuration is created with `configwatcher.NewConfig(sourceType)`.
+Use `SetOption(key, value)` to supply source-specific settings and
+`WithOption(key)` to read them. ConfigMap uses `namespace`, `name`, and `key`;
+pass the configuration value to `NewWithConfig` to construct the watcher.
+Tests cover missing options, option replacement, isolation between instances, and passing configuration by value.
+
+`util.StringToMap("key1:value1,key2:value2")` parses comma-separated options into
+`map[string]string`. It trims surrounding whitespace, splits at the first colon,
+keeps empty values, and lets later entries replace earlier duplicate keys.
+Entries without a colon or with an empty key are skipped. Empty input returns
+an empty, writable map. Values cannot contain commas.
+
+Configuration source options are supplied through `CONFIGWATCHER_SOURCE_OPTIONS`,
+for example `namespace:default,name:keda-config,key:config.yaml` for ConfigMap.
+Empty or wholly malformed options fail startup; ConfigMap requires all three
+fields. Tests cover option parsing, required fields, and unsupported source types.

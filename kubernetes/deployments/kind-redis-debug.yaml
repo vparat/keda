@@ -47,12 +47,10 @@ spec:
           imagePullPolicy: Never
           # command: [ "tail","-f","/dev/null"]
           env:
-            - name: CONFIGMAP_NAME
-              value: keda-config
-            - name: CONFIGMAP_NAMESPACE
-              value: default
-            - name: CONFIGMAP_KEY
-              value: config.yaml
+            - name: CONFIGWATCHER_TYPE
+              value: "configmap"
+            - name: CONFIGWATCHER_SOURCE_OPTIONS
+              value: "name:keda-config,namespace:default,key:config.yaml"
             - name: RESYNC_TIME_DURATION
               value: "1440m"
             - name: CLUSTER_NAME
@@ -71,11 +69,11 @@ spec:
               value: "redis-service:6379"
           resources:
             requests:
-              cpu: 100m
-              memory: 64Mi
+              cpu: 10m
+              memory: 10Mi
             limits:
-              cpu: 1500m
-              memory: 512Mi
+              cpu: 1000m
+              memory: 256Mi
           volumeMounts: []
 
 ---
