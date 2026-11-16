@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keda-config
+  namespace: default
+data:
+  config.yaml: |
+    events:
+      - name: pod-created
+        inbound:
+          kind: pod
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo pod-created"
+      - name: service-created
+        inbound:
+          kind: service
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo service-created"
+      - name: configmap-created
+        inbound:
+          kind: configmap
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo configmap-created"
+      - name: pod-deleted
+        inbound:
+          kind: pod
+          action: delete
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo pod-deleted"
+      - name: service-deleted
+        inbound:
+          kind: service
+          action: delete
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo service-deleted"
+      - name: configmap-deleted
+        inbound:
+          kind: configmap
+          action: delete
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo configmap-deleted"
+      - name: namespace-created
+        inbound:
+          kind: namespace
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo namespace-created"
