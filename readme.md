@@ -1,8 +1,8 @@
 # keda — Kubernetes Event-Driven Actions
 
-Run shell commands in response to Kubernetes resource changes. keda watches rules stored in a ConfigMap, filters events by resource kind, namespace, and labels, and executes the matching actions inside its container.
+Run shell commands in response to Kubernetes resource changes. keda watches rules stored in a ConfigMap or local file, filters events by resource kind, namespace, and labels, and executes the matching actions inside its container.
 
-Use it for lightweight operational automation: recording resource changes, invoking maintenance scripts, or reacting to configuration updates. Rules reload automatically when the ConfigMap changes.
+Use it for lightweight operational automation: recording resource changes, invoking maintenance scripts, or reacting to configuration updates. Rules reload automatically when the selected configuration source changes.
 
 ## Contents
 
@@ -163,10 +163,11 @@ The complete list and API versions are defined in [`kindToGVR`](internal/informe
 
 ### Reload behavior
 
-- The ConfigMap must exist at startup.
+- The selected ConfigMap or file must exist and contain valid, nonempty rules at startup.
 - Valid configuration updates replace the active rules automatically.
-- Invalid updates are logged; the previous rules remain active.
-- Deleting the ConfigMap keeps the active rules until a valid configuration is recreated.
+- Invalid or empty updates are logged; the previous rules remain active. Unchanged contents do not restart rules.
+- Deleting the ConfigMap or watched file keeps the active rules until valid configuration is recreated.
+- An unexpected source stream closure stops the controller; cancellation joins its active workers.
 - Identical inbound/outbound rules collapse to the first entry, regardless of name. Kind/action casing, label ordering, command aliases, and surrounding command whitespace are normalized.
 - Different outbound actions for the same inbound event remain separate rules.
 
@@ -175,7 +176,7 @@ The complete list and API versions are defined in [`kindToGVR`](internal/informe
 | Variable | Default | Description |
 | --- | --- | --- |
 | `CONFIGWATCHER_TYPE` | `configmap` | Configuration source; `configmap` or `file`. |
-| `CONFIGWATCHER_SOURCE_OPTIONS` | `name:keda-config,namespace:default,key:config.yaml` | Comma-separated `key:value` source options. ConfigMap requires `namespace`, `name`, and `key`, for example `namespace:default,name:keda-config,key:config.yaml`. |
+| `CONFIGWATCHER_SOURCE_OPTIONS` | `name:keda-config,namespace:default,key:config.yaml` | Comma-separated `key:value` source options. ConfigMap requires `namespace`, `name`, and `key`; file requires `path`, for example `path:/home/config/config.yaml`. |
 | `LOG_TYPE` | `json` | `json` or `text`, case insensitive. Unknown values use JSON. |
 | `LOG_LEVEL` | `info` | Minimum severity: `debug`, `info`, or `error`, case insensitive. Unknown values use `info`. |
 | `CMDRUNNER_SEMAPHORE_MAX` | `5` | Maximum concurrent commands across rules in one process. |
@@ -184,7 +185,10 @@ The complete list and API versions are defined in [`kindToGVR`](internal/informe
 | `CACHE_HOST` | Empty | Comma-separated backend addresses, for example `redis-service:6379`. |
 | `CACHE_TTL` | `30m` | Cache entry lifetime as a Go duration. Empty or invalid values log an error and use the default. |
 
-Invalid or nonpositive command concurrency settings log a warning and use their defaults. Logs are written to stderr. Set `CACHE_TTL=30m` explicitly to avoid a parsing warning when using the default duration.
+Informer resync runs every 10 minutes. `RESYNC_TIME_DURATION` and `CLUSTER_NAME`
+appear in some example manifests but are not read by the current code.
+
+Invalid or nonpositive command concurrency settings log a warning and use their defaults. Logs are written to stderr. Set `CACHE_TTL=30m` explicitly to avoid a parsing error log when using the default duration.
 
 ## Execution and caching
 
@@ -212,11 +216,11 @@ Cache failures allow events through. Cache entries are written before action com
 
 Use a dedicated service account with permissions appropriate to the configured rules:
 
-- `get`, `list`, and `watch` for the configuration ConfigMap.
+- `get`, `list`, and `watch` for the configuration ConfigMap when using the ConfigMap source.
 - `list` and `watch` for watched resource types in the required namespaces.
 - Any additional permissions required by outbound commands.
 
-Restrict who can modify the rule ConfigMap: command rules execute shell code with the container's access and service account credentials. Avoid commands that repeatedly modify the resources they watch unless the script handles the resulting events intentionally.
+Restrict who can modify the rule ConfigMap, file, or mounted Secret: command rules execute shell code with the container's access and service account credentials. Avoid commands that repeatedly modify the resources they watch unless the script handles the resulting events intentionally.
 
 The [Dockerfile](Dockerfile) builds a Linux binary and runs it as a non-root user. The runtime includes Bash, `kubectl`, and `jq`. [Dockerfile-gcloud](Dockerfile-gcloud) also includes the Google Cloud CLI (`gcloud`) and verifies that Bash, gcloud, and kubectl run as that user. Add application-specific executables or scripts to a derived image or mount them into the container. For clusters outside kind, push your image to an accessible registry and replace the sample's image tag and `imagePullPolicy: Never`.
 
@@ -234,7 +238,7 @@ go test ./... -coverprofile=cover.out
 go tool cover -func=cover.out
 ```
 
-`make build` embeds the current Git commit in the binary's version. Tests exercise rule validation, reloads, dispatch, command lifecycle, informer callbacks, cache behavior, context propagation to cache operations, configuration source selection and API failures, and logging. They use fake Kubernetes clients and local cache test servers; no running cluster or external cache service is required. The test environment must permit local socket listeners.
+`make build` embeds the current Git commit in the binary's version. Tests exercise rule validation, reloads, dispatch, command lifecycle, informer callbacks, cache behavior, context propagation to cache operations, configuration source selection and API failures, and logging. They use fake Kubernetes clients and local cache test servers; no running cluster or external cache service is required. The test environment must permit local socket listeners and filesystem notifications.
 
 ### Useful Make targets
 
@@ -245,6 +249,7 @@ go tool cover -func=cover.out
 | `make test-cover` | Generate coverage and open the HTML report. |
 | `make lint` | Run `golangci-lint` when installed. |
 | `make image` | Tidy/vendor dependencies, build an image tagged with the current commit, and remove `vendor`. |
+| `make image-gcloud` | Build the commit-tagged image with the Google Cloud CLI using `Dockerfile-gcloud`. |
 | `make kind-load-image` | Load the commit-tagged image into the default kind cluster. |
 | `make clean` | Remove the binary, `vendor`, and `cover.out` when present. |
 | `make clean-images` | List and remove local `keda` image tags. |
@@ -254,14 +259,16 @@ go tool cover -func=cover.out
 ```text
 main.go                     Startup, logging, cache configuration
 internal/eventcontroller/   Rule validation, reloads, and dispatch
+internal/configwatcher/     ConfigMap and file configuration sources
 internal/informers/         Kubernetes resource watches and event filtering
 internal/action/            Command execution and concurrency controls
 internal/cache/             No-op, Redis, and Memcached backends
 internal/event/             Event configuration types
+internal/util/              Shared option parsing helpers
 kubernetes/deployments/     Local deployment examples
 ```
 
-The event controller wires its Kubernetes configuration, ConfigMap watcher,
+The event controller wires its Kubernetes configuration, selected configuration source,
 resource watchers, and command factory once in a private controller instance.
 Startup calls its configuration/reload loop directly; the rule dispatcher owns
 informer and action workers. Reloads cancel and join the old workers before
@@ -275,7 +282,7 @@ When contributing, add tests for behavioral changes, update configuration exampl
 | Symptom | Check |
 | --- | --- |
 | `failed to get in-cluster config` | Run the controller inside Kubernetes with service account credentials available. |
-| Configuration fails at startup | Confirm the ConfigMap namespace, name, data key, and YAML content. |
+| Configuration fails at startup | Check source type and options, ConfigMap location or file path and permissions, and YAML content. |
 | Rules do not react to changes | Check enabled rules, singular resource names, namespace/label selectors, and watch permissions. |
 | Existing resources trigger commands at startup | Create rules receive the informer's initial resource list. Use idempotent commands. |
 | A repeated event is skipped | Check resource-version cache entries and whether the same job is queued or running. |
@@ -361,6 +368,8 @@ The `namespace`, `name`, and `key` options must all be nonempty for ConfigMap.
 The [file source](internal/configwatcher/file/readme.md) uses
 `CONFIGWATCHER_TYPE=file` and `CONFIGWATCHER_SOURCE_OPTIONS=path:/home/config/rules.yaml`.
 It emits initial contents and watches writes, replacements, and symlink swaps.
+The file source requires an explicit `path`; the default options describe a
+ConfigMap and cannot configure a file source.
 Deleting the ConfigMap retains the last rules until a valid replacement appears.
 
 To add another source, implement `Watcher` and register it in
@@ -395,5 +404,6 @@ uses `CONFIGWATCHER_TYPE=file` and reads `/home/config/config.yaml` from the
 read-only so projected Secret updates reach the file watcher through symlink
 swaps. The rules file is readable by the container's non-root user.
 
-Apply the manifest with an image that includes the file watcher. Update the Secret's rules and reapply to reload
+This example uses no-op caching and does not require Redis. Apply the manifest
+with an image that includes the file watcher. Update the Secret's rules and reapply to reload
 them after Kubernetes refreshes the mounted volume. No Pod restart is required.
