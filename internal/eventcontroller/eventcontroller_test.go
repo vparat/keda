@@ -93,6 +93,7 @@ func TestParseConfig(t *testing.T) {
 
 
 func TestConfigMapLifecycle(t *testing.T) {
+	t.Setenv("CONFIGMAP_NAME", "config")
 	client := fake.NewClientset(&corev1.ConfigMap{
 		Name:      "config",
 		Namespace: "default",
@@ -104,9 +105,6 @@ func TestConfigMapLifecycle(t *testing.T) {
 		done <- newController().run(
 			ctx,
 			client,
-			"default",
-			"config",
-			"config.yaml",
 		)
 	}()
 
@@ -167,7 +165,7 @@ func TestConfigMapLifecycle(t *testing.T) {
 
 func TestMissingConfigKey(t *testing.T) {
 
-	if _, err := configRules(&corev1.ConfigMap{}, "config.yaml"); err == nil {
+	if _, err := parseConfig(""); err == nil {
 		t.Fatal("expected missing key error")
 	}
 
@@ -175,6 +173,7 @@ func TestMissingConfigKey(t *testing.T) {
 
 
 func TestConfigMapReloadsRulesAndActions(t *testing.T) {
+	t.Setenv("CONFIGMAP_NAME", "config")
 	configuration := func(command string) string {
 		const configFormat = "events: [{name: pods, inbound: {kind: pod, action: create}, " +
 			"outbound: {kind: cmd, action: %s}}]"
@@ -202,9 +201,6 @@ func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 		done <- c.run(
 			ctx,
 			client,
-			"default",
-			"config",
-			"config.yaml",
 		)
 	}()
 	expect := func(want string) {

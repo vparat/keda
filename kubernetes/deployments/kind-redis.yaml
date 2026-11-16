@@ -62,7 +62,7 @@ spec:
             - name: CMDRUNNER_SEMAPHORE_TIMEOUT
               value: "20m"
             - name: LOG_LEVEL
-              value: "debug"
+              value: "info"
             - name: "CACHE_TYPE"
               value: "redis"
             - name: "CACHE_TTL"

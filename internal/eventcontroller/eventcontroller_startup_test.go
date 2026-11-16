@@ -10,12 +10,10 @@ import (
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 )
-
 
 // TestParseConfigSelectors checks invalid selectors and valid log-only rules.
 // It takes the test handle and returns no values.
@@ -118,58 +116,67 @@ func TestStartFailures(t *testing.T) {
 }
 
 
-// TestRunSetupFailures verifies setup errors without starting any rule workers.
-// It takes the test handle and returns no values.
+// watcherFunc adapts a test function to the source interface.
+type watcherFunc func(context.Context) (<-chan []byte, func(), error)
+
+
+// Watch calls f with ctx and returns its stream, shutdown callback, and error.
+func (f watcherFunc) Watch(ctx context.Context) (<-chan []byte, func(), error) {
+	return f(ctx)
+}
+
+
+// TestRunSetupFailures checks source startup, invalid initial data, and early closure.
 func TestRunSetupFailures(t *testing.T) {
 	watchErr := errors.New("watch registration failed")
 
 	for _, tt := range []struct {
 		name, data, message string
-		exists, watched     bool
+		err                 error
+		closed              bool
 	}{
-		{name: "missing configmap", message: "get configmap default/config"},
-		{name: "invalid config", exists: true, data: "bad: field", message: "decode event configuration"},
-		{name: "watch failure", exists: true, data: "events: []", watched: true, message: "watch configmap default/config"},
+		{name: "watch failure", err: watchErr, message: "watch config"},
+		{name: "invalid config", data: "bad: field", message: "decode event configuration"},
+		{name: "empty config", message: "configuration must not be empty"},
+		{name: "closed source", closed: true, message: "closed before initial snapshot"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			client := fake.NewClientset()
-
-			if tt.exists {
-
-				if err := client.Tracker().Add(&corev1.ConfigMap{Name: "config", Namespace: "default", Data: map[string]string{"config.yaml": tt.data}}); err != nil {
-					t.Fatal(err)
-				}
-
-			}
-
-			watched := false
-			watch := func(ctx context.Context, got kubernetes.Interface, namespace, name string) (<-chan *corev1.ConfigMap, func(), error) {
-				watched = true
-
-				if got != client || namespace != "default" || name != "config" || ctx != t.Context() {
-					t.Error("wrong watch arguments")
-				}
-
-				return nil, nil, watchErr
-			}
+			stopped := false
 			c := newController()
-			c.watchConfig = watch
-			c.execute = func(context.Context, kubernetes.Interface, []Rule) {
-				t.Error("unexpected runner")
-			}
-			err := c.run(t.Context(), client, "default", "config", "config.yaml")
+			c.watchConfig = watcherFunc(func(ctx context.Context) (<-chan []byte, func(), error) {
 
-			if err == nil || !strings.Contains(err.Error(), tt.message) || watched != tt.watched {
-				t.Fatalf("error = %v, watched = %v", err, watched)
+				if ctx != t.Context() {
+					t.Error("wrong context")
+				}
+
+				if tt.err != nil {
+					return nil, nil, tt.err
+				}
+				updates := make(chan []byte, 1)
+
+				if !tt.closed {
+					updates <- []byte(tt.data)
+				}
+				close(updates)
+
+				return updates, func() { stopped = true }, nil
+			})
+			c.execute = func(context.Context, kubernetes.Interface, []Rule) { t.Error("unexpected runner") }
+			err := c.run(t.Context(), nil)
+
+			if err == nil || !strings.Contains(err.Error(), tt.message) {
+				t.Fatalf("error = %v", err)
 			}
 
-			if tt.watched && !errors.Is(err, watchErr) {
-				t.Fatalf("watch error not wrapped: %v", err)
+			if tt.err != nil && !errors.Is(err, tt.err) {
+				t.Fatalf("error not wrapped: %v", err)
 			}
 
+			if tt.err == nil && !stopped {
+				t.Fatal("watcher not stopped")
+			}
 		})
 	}
-
 }
 
 
@@ -178,12 +185,13 @@ func TestRunSetupFailures(t *testing.T) {
 // It takes the test handle and returns no values.
 func TestRunUpdates(t *testing.T) {
 	initial := "events: [{disabled: true}]"
-	client := fake.NewClientset(&corev1.ConfigMap{Name: "config", Namespace: "default", Data: map[string]string{"config.yaml": initial}})
-	updates := make(chan *corev1.ConfigMap)
+	client := fake.NewClientset()
+	updates := make(chan []byte, 1)
+	updates <- []byte(initial)
 	transitions := make(chan string, 10)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	watch := func(context.Context, kubernetes.Interface, string, string) (<-chan *corev1.ConfigMap, func(), error) {
+	watch := func(context.Context) (<-chan []byte, func(), error) {
 		return updates, func() {
 			transitions <- "watch stopped"
 		}, nil
@@ -206,8 +214,8 @@ func TestRunUpdates(t *testing.T) {
 	go func() {
 		c := newController()
 		c.execute = execute
-		c.watchConfig = watch
-		done <- c.run(ctx, client, "default", "config", "config.yaml")
+		c.watchConfig = watcherFunc(watch)
+		done <- c.run(ctx, client)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -243,7 +251,7 @@ func TestRunUpdates(t *testing.T) {
 		t.Helper()
 
 		select {
-		case updates <- &corev1.ConfigMap{Data: map[string]string{"config.yaml": data}}:
+		case updates <- []byte(data):
 		case <-time.After(5 * time.Second):
 			t.Fatal("update not consumed")
 		}
@@ -252,10 +260,86 @@ func TestRunUpdates(t *testing.T) {
 	expect("start empty")
 	send(initial)
 	send("events: [{name: invalid}]")
+	send("")
+	send("   ")
 	send(`events: [{name: next, inbound: {kind: pod, action: create}, outbound: {kind: nil}}]`)
 	expect("stop empty")
 	expect("start next")
 	cancel()
 	expect("stop next")
 	expect("watch stopped")
+}
+
+
+// TestRunSourceClosure verifies an ended source stops and joins active rules.
+func TestRunSourceClosure(t *testing.T) {
+	updates := make(chan []byte, 1)
+	updates <- []byte("events: []")
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	sourceStopped := false
+	c := newController()
+	c.watchConfig = watcherFunc(func(context.Context) (<-chan []byte, func(), error) {
+		return updates, func() { sourceStopped = true }, nil
+	})
+	c.execute = func(ctx context.Context, _ kubernetes.Interface, _ []Rule) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+	}
+	go func() { <-started; close(updates) }()
+	err := c.run(t.Context(), nil)
+
+	if err == nil || !strings.Contains(err.Error(), "configuration source closed") {
+		t.Fatalf("error = %v", err)
+	}
+
+	if !sourceStopped {
+		t.Fatal("source not stopped")
+	}
+
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("runner not joined")
+	}
+}
+
+
+// TestRunCancellationBeforeSnapshot checks cancellation while waiting for initial data.
+func TestRunCancellationBeforeSnapshot(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stopped := false
+	c := newController()
+	c.watchConfig = watcherFunc(func(context.Context) (<-chan []byte, func(), error) {
+		cancel()
+
+		return make(chan []byte), func() { stopped = true }, nil
+	})
+	c.execute = func(context.Context, kubernetes.Interface, []Rule) { t.Error("unexpected runner") }
+
+	if err := c.run(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if !stopped {
+		t.Fatal("source not stopped")
+	}
+}
+
+
+// TestRunUnsupportedSource verifies source selection fails before starting rules.
+// It takes t and returns no values.
+func TestRunUnsupportedSource(t *testing.T) {
+	t.Setenv("CONFIGWATCHER_TYPE", "unsupported")
+	c := newController()
+	c.execute = func(context.Context, kubernetes.Interface, []Rule) {
+		t.Error("unexpected rule execution")
+	}
+	err := c.run(t.Context(), nil)
+
+	if err == nil || !strings.Contains(err.Error(), "unsupported configuration source") {
+		t.Fatalf("source selection error = %v", err)
+	}
 }

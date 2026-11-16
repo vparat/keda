@@ -171,6 +171,7 @@ The complete list and API versions are defined in [`kindToGVR`](internal/informe
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `CONFIGWATCHER_TYPE` | `configmap` | Configuration source; currently only `configmap` is supported. |
 | `CONFIGMAP_NAMESPACE` | `default` | Namespace containing the rule ConfigMap. |
 | `CONFIGMAP_NAME` | `keda-config` | Rule ConfigMap name. |
 | `CONFIGMAP_KEY` | `config.yaml` | Data key containing the rules. |
@@ -232,7 +233,7 @@ go test ./... -coverprofile=cover.out
 go tool cover -func=cover.out
 ```
 
-`make build` embeds the current Git commit in the binary's version. Tests exercise rule validation, reloads, dispatch, command lifecycle, informer callbacks, cache behavior, context propagation to cache operations, and logging. They use fake Kubernetes clients and local cache test servers; no running cluster or external cache service is required. The test environment must permit local socket listeners.
+`make build` embeds the current Git commit in the binary's version. Tests exercise rule validation, reloads, dispatch, command lifecycle, informer callbacks, cache behavior, context propagation to cache operations, configuration source selection and API failures, and logging. They use fake Kubernetes clients and local cache test servers; no running cluster or external cache service is required. The test environment must permit local socket listeners.
 
 ### Useful Make targets
 
@@ -332,3 +333,24 @@ at `redis-service:6379`.
 The ConfigMap embeds [internal/scripts/check-allowed-deployment.sh](internal/scripts/check-allowed-deployment.sh)
 under the plural filename `check-allowed-deployments.sh`. Keep the source script
 and embedded copy in sync when changing the arguments, allowlist, or behavior.
+
+### Configuration sources
+
+The controller consumes `configwatcher.Watcher`, whose `Watch(ctx)` method returns
+configuration bytes, a shutdown callback, and a setup error. The first snapshot
+must contain the initial configuration; subsequent snapshots are reloads. Empty
+or invalid initial configuration fails startup. Invalid or empty updates keep the
+current rules, and unchanged bytes skip reloads. Unexpected stream closure stops
+the controller with an error. Cancellation joins the active rules and source workers.
+
+The default `configmap` source reuses the controller's in-cluster Kubernetes client,
+reads the initial ConfigMap, and watches its selected `Data` key. Existing
+`CONFIGMAP_NAMESPACE`, `CONFIGMAP_NAME`, and `CONFIGMAP_KEY` settings still apply.
+`CONFIGWATCHER_TYPE` defaults to `configmap`; unsupported values fail startup.
+Deleting the ConfigMap retains the last rules until a valid replacement appears.
+
+To add another source, implement `Watcher` and register it in
+`internal/configwatcher.NewWithConfig`. Sources own their workers, close their
+output stream when stopped, and provide an idempotent shutdown callback that
+cancels and joins those workers. No context is stored in source configuration;
+each call to `Watch` uses its supplied context.

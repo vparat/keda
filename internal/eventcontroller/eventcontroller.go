@@ -9,14 +9,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vparat/configmapwatcher"
 	"github.com/vparat/keda/internal/action"
 	"github.com/vparat/keda/internal/cache"
+	"github.com/vparat/keda/internal/configwatcher"
 	"github.com/vparat/keda/internal/event"
 	"github.com/vparat/keda/internal/informers"
 	"golang.org/x/sync/semaphore"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -39,6 +37,10 @@ type Configuration struct {
 // parseConfig validates and normalizes enabled rules. Equivalent behaviors are
 // deduplicated before checking for conflicting rule names.
 func parseConfig(data string) ([]Rule, error) {
+
+	if strings.TrimSpace(data) == "" {
+		return nil, fmt.Errorf("configuration must not be empty")
+	}
 	var config Configuration
 
 	if err := yaml.UnmarshalStrict([]byte(data), &config); err != nil {
@@ -79,6 +81,7 @@ func parseConfig(data string) ([]Rule, error) {
 
 		switch strings.ToLower(rule.Outbound.Kind) {
 		case "cmd", "command":
+
 			if strings.TrimSpace(rule.Outbound.Action) == "" {
 				return nil, fmt.Errorf("event %q: empty command", rule.Name)
 			}
@@ -117,6 +120,7 @@ func parseConfig(data string) ([]Rule, error) {
 }
 
 func env(key, fallback string) string {
+
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
@@ -128,7 +132,7 @@ func env(key, fallback string) string {
 // Tests replace these operations on their own instance.
 type controller struct {
 	configure      func() (*rest.Config, error)
-	watchConfig    func(context.Context, kubernetes.Interface, string, string) (<-chan *corev1.ConfigMap, func(), error)
+	watchConfig    configwatcher.Watcher
 	watchResources func(context.Context, kubernetes.Interface, string, string, string, string, string, chan<- informers.Message) error
 	newCommand     func(action.Config) (*action.Command, error)
 	execute        func(context.Context, kubernetes.Interface, []Rule)
@@ -138,7 +142,6 @@ type controller struct {
 func newController() *controller {
 	c := &controller{
 		configure:      rest.InClusterConfig,
-		watchConfig:    configmapwatcher.Watch,
 		watchResources: informers.CreateAndRun,
 		newCommand:     action.NewCommandAction,
 	}
@@ -176,16 +179,9 @@ func (c *controller) start(ctx context.Context, cancelParent context.CancelFunc)
 		return
 	}
 
-	namespace := env("CONFIGMAP_NAMESPACE", "default")
-	name := env("CONFIGMAP_NAME", "keda-config")
-	key := env("CONFIGMAP_KEY", "config.yaml")
-
 	if err := c.run(
 		ctx,
 		client,
-		namespace,
-		name,
-		key,
 	); err != nil {
 		logger.Error("controller failed", "error", err)
 		cancelParent()
@@ -193,34 +189,54 @@ func (c *controller) start(ctx context.Context, cancelParent context.CancelFunc)
 
 }
 
-// run loads the named ConfigMap using client and reloads its rules when the value at key changes.
-// It returns setup errors and joins all runners when ctx is canceled.
-func (c *controller) run(ctx context.Context, client kubernetes.Interface, namespace, name, key string) error {
+// run consumes configuration snapshots and reloads their rules using client.
+// It returns startup or unexpected stream errors and joins workers on exit.
+func (c *controller) run(ctx context.Context, client kubernetes.Interface) error {
 	logger := slog.Default().With("component", "eventcontroller")
-	cm, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
+	source := c.watchConfig
+
+	if source == nil {
+		var err error
+		source, err = configwatcher.NewWithConfig(configwatcher.Config{
+			Type:      env("CONFIGWATCHER_TYPE", "configmap"),
+			Namespace: env("CONFIGMAP_NAMESPACE", "default"),
+			Name:      env("CONFIGMAP_NAME", "keda-config"),
+			Key:       env("CONFIGMAP_KEY", "config.yaml"),
+			Client:    client,
+		})
+
+		if err != nil {
+			return err
+		}
+	}
+	updates, shutdown, err := source.Watch(ctx)
 
 	if err != nil {
-		return fmt.Errorf("get configmap %s/%s: %w", namespace, name, err)
+		return fmt.Errorf("watch config: %w", err)
 	}
-
-	rules, err := configRules(cm, key)
-
-	if err != nil {
-		return err
-	}
-
-	updates, shutdown, err := c.watchConfig(
-		ctx,
-		client,
-		namespace,
-		name,
-	)
-
-	if err != nil {
-		return fmt.Errorf("watch configmap %s/%s: %w", namespace, name, err)
-	}
-
 	defer shutdown()
+	var current string
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case data, ok := <-updates:
+
+		if !ok {
+
+			if ctx.Err() != nil {
+				return nil
+			}
+
+			return fmt.Errorf("configuration source closed before initial snapshot")
+		}
+		current = string(data)
+	}
+	rules, err := parseConfig(current)
+
+	if err != nil {
+		return fmt.Errorf("initial configuration: %w", err)
+	}
 
 	// Each runner owns its context and completion channel. Stop waits for all
 	// informers and actions before the next configuration starts.
@@ -241,20 +257,30 @@ func (c *controller) run(ctx context.Context, client kubernetes.Interface, names
 	defer func() {
 		stop()
 	}()
-	current := cm.Data[key]
 
 	for {
 
 		select {
 		case <-ctx.Done():
 			return nil
-		case cm := <-updates:
+		case data, ok := <-updates:
 
-			if cm.Data[key] == current {
+			if !ok {
+
+				if ctx.Err() != nil {
+					return nil
+				}
+
+				return fmt.Errorf("configuration source closed")
+			}
+			snapshot := string(data)
+
+			if snapshot == current {
 				continue
 			}
 
-			next, err := configRules(cm, key)
+			next, err := parseConfig(snapshot)
+
 			if err != nil {
 				logger.Error("invalid configuration; keeping current rules", "error", err)
 				continue
@@ -262,28 +288,10 @@ func (c *controller) run(ctx context.Context, client kubernetes.Interface, names
 
 			stop()
 			stop = start(next)
-			current = cm.Data[key]
+			current = snapshot
 			logger.Info("configuration reloaded", "events", len(next))
 		}
-
 	}
-
-}
-
-// configRules requires a nonempty Data entry before parsing its rules.
-func configRules(cm *corev1.ConfigMap, key string) ([]Rule, error) {
-	data := cm.Data[key]
-
-	if strings.TrimSpace(data) == "" {
-		return nil, fmt.Errorf(
-			"configmap %s/%s missing nonempty key %q",
-			cm.Namespace,
-			cm.Name,
-			key,
-		)
-	}
-
-	return parseConfig(data)
 }
 
 // runRules watches the supplied rules using client and dispatches their actions.
@@ -301,7 +309,6 @@ func (c *controller) runRules(ctx context.Context, client kubernetes.Interface, 
 	for _, rule := range rules {
 		byName[rule.Name] = rule
 		workers.Go(func() {
-
 			if err := c.watchResources(
 				ctx,
 				client,
