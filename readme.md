@@ -343,7 +343,7 @@ or invalid initial configuration fails startup. Invalid or empty updates keep th
 current rules, and unchanged bytes skip reloads. Unexpected stream closure stops
 the controller with an error. Cancellation joins the active rules and source workers.
 
-The default `configmap` source reuses the controller's in-cluster Kubernetes client,
+The default `configmap` source creates its own in-cluster Kubernetes client,
 reads the initial ConfigMap, and watches its selected `Data` key. Existing
 `CONFIGMAP_NAMESPACE`, `CONFIGMAP_NAME`, and `CONFIGMAP_KEY` settings still apply.
 `CONFIGWATCHER_TYPE` defaults to `configmap`; unsupported values fail startup.

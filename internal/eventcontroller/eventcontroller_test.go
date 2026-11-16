@@ -3,6 +3,7 @@ package eventcontroller
 import (
 	"context"
 	"fmt"
+	configmapsource "github.com/vparat/keda/internal/configwatcher/configmap"
 	"testing"
 	"time"
 
@@ -102,7 +103,9 @@ func TestConfigMapLifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- newController().run(
+		c := newController()
+		c.watchConfig = configmapsource.ConfigMap{Client: client, Namespace: "default", Name: "config", Key: "config.yaml"}
+		done <- c.run(
 			ctx,
 			client,
 		)
@@ -198,6 +201,7 @@ func TestConfigMapReloadsRulesAndActions(t *testing.T) {
 	go func() {
 		c := newController()
 		c.execute = execute
+		c.watchConfig = configmapsource.ConfigMap{Client: client, Namespace: "default", Name: "config", Key: "config.yaml"}
 		done <- c.run(
 			ctx,
 			client,

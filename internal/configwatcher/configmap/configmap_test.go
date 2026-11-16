@@ -104,7 +104,6 @@ func TestWatchSetupErrors(t *testing.T) {
 		source  ConfigMap
 		message string
 	}{
-		{name: "no client", message: "requires a Kubernetes client"},
 		{name: "missing map", source: ConfigMap{Client: fake.NewClientset(), Namespace: "default", Name: "missing", Key: "config.yaml"}, message: "get configmap default/missing"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -154,5 +153,30 @@ func TestWatchReadFailure(t *testing.T) {
 
 	if !errors.Is(err, failure) || !strings.Contains(err.Error(), "custom/rules") || updates != nil || stop != nil {
 		t.Fatalf("Watch returned updates=%v, error=%v", updates, err)
+	}
+}
+
+
+// TestNew checks required fields and unavailable cluster credentials using t.
+// It returns no values.
+func TestNew(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+
+	for _, tt := range []struct {
+		name, namespace, mapName, key, message string
+	}{
+		{name: "missing name", namespace: "default", key: "events", message: "name is required"},
+		{name: "missing key", namespace: "default", mapName: "rules", message: "key is required"},
+		{name: "missing namespace", mapName: "rules", key: "events", message: "namespace is required"},
+		{name: "unavailable cluster", namespace: "default", mapName: "rules", key: "events", message: "failed to get in-cluster config"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			source, err := New(tt.namespace, tt.mapName, tt.key)
+
+			if err == nil || err.Error() != tt.message || source != (ConfigMap{}) {
+				t.Fatalf("New = %#v, %v; want %q", source, err, tt.message)
+			}
+		})
 	}
 }

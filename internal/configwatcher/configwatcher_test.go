@@ -1,40 +1,34 @@
 package configwatcher
 
 import (
+	"strings"
 	"testing"
-
-	"github.com/vparat/keda/internal/configwatcher/configmap"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
-// TestNewWithConfig verifies defaults, explicit selection, and errors using t.
+// TestNewWithConfig checks source selection and constructor errors using t.
+// It returns no values.
 func TestNewWithConfig(t *testing.T) {
-	client := fake.NewClientset()
-	source, err := NewWithConfig(Config{Client: client})
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
 
-	if err != nil {
-		t.Fatal(err)
-	}
-	cm, ok := source.(configmap.ConfigMap)
+	for _, tt := range []struct {
+		name    string
+		config  Config
+		message string
+	}{
+		{name: "empty type", message: `unsupported configuration source ""`},
+		{name: "unknown type", config: Config{Type: "unknown"}, message: `unsupported configuration source "unknown"`},
+		{name: "missing name", config: Config{Type: "configmap"}, message: "name is required"},
+		{name: "missing key", config: Config{Type: "configmap", Name: "rules"}, message: "key is required"},
+		{name: "missing namespace", config: Config{Type: "configmap", Name: "rules", Key: "events"}, message: "namespace is required"},
+		{name: "cluster configuration unavailable", config: Config{Type: "configmap", Name: "rules", Key: "events", Namespace: "custom"}, message: "failed to get in-cluster config"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			source, err := NewWithConfig(tt.config)
 
-	if !ok || cm.Client != client || cm.Name != "keda-config" || cm.Namespace != "default" || cm.Key != "config.yaml" {
-		t.Fatalf("source = %#v", source)
-	}
-	source, err = NewWithConfig(Config{Type: "configmap", Client: client, Name: "custom", Namespace: "ns", Key: "rules"})
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	cm = source.(configmap.ConfigMap)
-
-	if cm.Name != "custom" || cm.Namespace != "ns" || cm.Key != "rules" {
-		t.Fatalf("source = %#v", source)
-	}
-
-	for _, c := range []Config{{}, {Type: "unknown", Client: client}} {
-
-		if _, err := NewWithConfig(c); err == nil {
-			t.Fatalf("expected error for %#v", c)
-		}
+			if err == nil || !strings.Contains(err.Error(), tt.message) || source != nil {
+				t.Fatalf("NewWithConfig = %v, %v; want %q", source, err, tt.message)
+			}
+		})
 	}
 }

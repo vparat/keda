@@ -98,6 +98,11 @@ func TestStartFailures(t *testing.T) {
 			c.configure = func() (*rest.Config, error) {
 				return tt.cfg, tt.err
 			}
+			if tt.name == "controller" {
+				c.watchConfig = watcherFunc(func(context.Context) (<-chan []byte, func(), error) {
+					return nil, nil, errors.New("get configmap custom-ns/custom-map: unavailable")
+				})
+			}
 			c.start(ctx, func() {
 				calls++
 			})
@@ -118,7 +123,6 @@ func TestStartFailures(t *testing.T) {
 
 // watcherFunc adapts a test function to the source interface.
 type watcherFunc func(context.Context) (<-chan []byte, func(), error)
-
 
 // Watch calls f with ctx and returns its stream, shutdown callback, and error.
 func (f watcherFunc) Watch(ctx context.Context) (<-chan []byte, func(), error) {

@@ -171,7 +171,6 @@ func (c *controller) start(ctx context.Context, cancelParent context.CancelFunc)
 	}
 
 	client, err := kubernetes.NewForConfig(cfg)
-
 	if err != nil {
 		logger.Error("failed to create kubernetes client", "error", err)
 		cancelParent()
@@ -202,9 +201,7 @@ func (c *controller) run(ctx context.Context, client kubernetes.Interface) error
 			Namespace: env("CONFIGMAP_NAMESPACE", "default"),
 			Name:      env("CONFIGMAP_NAME", "keda-config"),
 			Key:       env("CONFIGMAP_KEY", "config.yaml"),
-			Client:    client,
 		})
-
 		if err != nil {
 			return err
 		}
