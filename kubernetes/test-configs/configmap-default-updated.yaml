@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keda-config
+  namespace: default
+data:
+  config.yaml: |
+    events:
+      - name: pod-created
+        inbound:
+          kind: pod
+          action: create
+          namespace: default
+        outbound:
+          kind: cmd
+          action: "echo pod-created"

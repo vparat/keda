@@ -116,7 +116,10 @@ The container includes `kubectl` and `jq`. Commands that access Kubernetes use t
 
 ## Rule configuration
 
-By default, keda reads the `config.yaml` key of ConfigMap `default/keda-config`:
+The deployment examples set `CONFIGWATCHER_SOURCE_OPTIONS` to
+`namespace:default,name:keda-config,key:config.yaml`, which reads the `config.yaml`
+key of ConfigMap `default/keda-config`. Set these options explicitly; the source
+location has no default:
 
 ```yaml
 apiVersion: v1
@@ -171,9 +174,8 @@ The complete list and API versions are defined in [`kindToGVR`](internal/informe
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CONFIGMAP_NAMESPACE` | `default` | Namespace containing the rule ConfigMap. |
-| `CONFIGMAP_NAME` | `keda-config` | Rule ConfigMap name. |
-| `CONFIGMAP_KEY` | `config.yaml` | Data key containing the rules. |
+| `CONFIGWATCHER_TYPE` | `configmap` | Configuration source; currently only `configmap` is supported. |
+| `CONFIGWATCHER_SOURCE_OPTIONS` | Empty (required) | Comma-separated `key:value` source options. ConfigMap requires `namespace`, `name`, and `key`, for example `namespace:default,name:keda-config,key:config.yaml`. |
 | `LOG_TYPE` | `json` | `json` or `text`, case insensitive. Unknown values use JSON. |
 | `LOG_LEVEL` | `info` | Minimum severity: `debug`, `info`, or `error`, case insensitive. Unknown values use `info`. |
 | `CMDRUNNER_SEMAPHORE_MAX` | `5` | Maximum concurrent commands across rules in one process. |
@@ -232,7 +234,7 @@ go test ./... -coverprofile=cover.out
 go tool cover -func=cover.out
 ```
 
-`make build` embeds the current Git commit in the binary's version. Tests exercise rule validation, reloads, dispatch, command lifecycle, informer callbacks, cache behavior, context propagation to cache operations, and logging. They use fake Kubernetes clients and local cache test servers; no running cluster or external cache service is required. The test environment must permit local socket listeners.
+`make build` embeds the current Git commit in the binary's version. Tests exercise rule validation, reloads, dispatch, command lifecycle, informer callbacks, cache behavior, context propagation to cache operations, configuration source selection and API failures, and logging. They use fake Kubernetes clients and local cache test servers; no running cluster or external cache service is required. The test environment must permit local socket listeners.
 
 ### Useful Make targets
 
@@ -332,3 +334,51 @@ at `redis-service:6379`.
 The ConfigMap embeds [internal/scripts/check-allowed-deployment.sh](internal/scripts/check-allowed-deployment.sh)
 under the plural filename `check-allowed-deployments.sh`. Keep the source script
 and embedded copy in sync when changing the arguments, allowlist, or behavior.
+
+### Configuration sources
+
+The controller consumes `configwatcher.Watcher`, whose `Watch(ctx)` method returns
+configuration bytes, a shutdown callback, and a setup error. The first snapshot
+must contain the initial configuration; subsequent snapshots are reloads. Empty
+or invalid initial configuration fails startup. Invalid or empty updates keep the
+current rules, and unchanged bytes skip reloads. Unexpected stream closure stops
+the controller with an error. Cancellation joins the active rules and source workers.
+
+The default `configmap` source creates its own in-cluster Kubernetes client,
+reads the initial ConfigMap, and watches its selected `Data` key. Configure its
+location with `CONFIGWATCHER_SOURCE_OPTIONS`:
+
+```yaml
+env:
+  - name: CONFIGWATCHER_TYPE
+    value: configmap
+  - name: CONFIGWATCHER_SOURCE_OPTIONS
+    value: "namespace:default,name:keda-config,key:config.yaml"
+```
+
+`CONFIGWATCHER_TYPE` defaults to `configmap`; unsupported values fail startup.
+The `namespace`, `name`, and `key` options must all be nonempty.
+Deleting the ConfigMap retains the last rules until a valid replacement appears.
+
+To add another source, implement `Watcher` and register it in
+`internal/configwatcher.NewWithConfig`. Sources own their workers, close their
+output stream when stopped, and provide an idempotent shutdown callback that
+cancels and joins those workers. No context is stored in source configuration;
+each call to `Watch` uses its supplied context.
+
+Source configuration is created with `configwatcher.NewConfig(sourceType)`.
+Use `SetOption(key, value)` to supply source-specific settings and
+`WithOption(key)` to read them. ConfigMap uses `namespace`, `name`, and `key`;
+pass the configuration value to `NewWithConfig` to construct the watcher.
+Tests cover missing options, option replacement, isolation between instances, and passing configuration by value.
+
+`util.StringToMap("key1:value1,key2:value2")` parses comma-separated options into
+`map[string]string`. It trims surrounding whitespace, splits at the first colon,
+keeps empty values, and lets later entries replace earlier duplicate keys.
+Entries without a colon or with an empty key are skipped. Empty input returns
+an empty, writable map. Values cannot contain commas.
+
+Configuration source options are supplied through `CONFIGWATCHER_SOURCE_OPTIONS`,
+for example `namespace:default,name:keda-config,key:config.yaml` for ConfigMap.
+Empty or wholly malformed options fail startup; ConfigMap requires all three
+fields. Tests cover option parsing, required fields, and unsupported source types.
