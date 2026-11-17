@@ -43,7 +43,7 @@ spec:
       serviceAccountName: keda-sa
       containers:
         - name: keda
-          image: keda:a7fc430
+          image: keda:0ee3b8e
           imagePullPolicy: Never
           # command: [ "tail","-f","/dev/null"]
           env:

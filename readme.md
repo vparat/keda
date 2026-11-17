@@ -250,7 +250,7 @@ go tool cover -func=cover.out
 | `make lint` | Run `golangci-lint` when installed. |
 | `make image` | Tidy/vendor dependencies, build an image tagged with the current commit, and remove `vendor`. |
 | `make image-gcloud` | Build the commit-tagged image with the Google Cloud CLI using `Dockerfile-gcloud`. |
-| `make kind-load-image` | Load the commit-tagged image into the default kind cluster. |
+| `make kind-load-image` | Build and load the commit-tagged image into the default kind cluster, then update the KEDA image tags in `kubernetes/deployments/`. |
 | `make clean` | Remove the binary, `vendor`, and `cover.out` when present. |
 | `make clean-images` | List and remove local `keda` image tags. |
 
@@ -264,7 +264,7 @@ internal/informers/         Kubernetes resource watches and event filtering
 internal/action/            Command execution and concurrency controls
 internal/cache/             No-op, Redis, and Memcached backends
 internal/event/             Event configuration types
-internal/util/              Shared option parsing helpers
+internal/util/              Shared environment lookup and option parsing helpers
 kubernetes/deployments/     Local deployment examples
 ```
 

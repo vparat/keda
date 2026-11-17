@@ -87,17 +87,20 @@ post-image:
 	rm -rf vendor
 
 .PHONY: image
-image: tidy
+image: tidy lint test
 	$(MAKE) pre-image
 	docker build -t ${module}:${GIT_COMMIT} --build-arg alpine_version=$(ALPINE_VERSION) --build-arg golang_version=${GO_VERSION} .
 	$(MAKE) post-image	
 
 .PHONY: image-gcloud
-image-gcloud: tidy
+image-gcloud: tidy lint test
 	$(MAKE) pre-image
 	docker build -t ${module}:${GIT_COMMIT} --build-arg alpine_version=$(ALPINE_VERSION) --build-arg golang_version=${GO_VERSION} -f ./Dockerfile-gcloud .
 	$(MAKE) post-image	
 
 .PHONY: kind-load-image
-kind-load-image:
-	kind load docker-image ${module}:${GIT_COMMIT}
+kind-load-image: image
+	image="${module}:${GIT_COMMIT}"; \
+	kind load docker-image "$$image" && \
+	sed -Ei "s|^([[:blank:]]*image:[[:blank:]]*)${module}:[[:alnum:]_.-]+([[:blank:]]*(#.*)?$$)|\1$$image\2|" \
+		$(wildcard kubernetes/deployments/*.yaml kubernetes/deployments/*.yml)

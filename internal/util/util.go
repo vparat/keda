@@ -1,7 +1,10 @@
 // Package util provides shared helpers.
 package util
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 // StringToMap parses comma-separated key:value entries from input into a map.
 // It trims whitespace, preserves colons in values, and skips entries without a
@@ -22,4 +25,15 @@ func StringToMap(input string) map[string]string {
 	}
 
 	return result
+}
+
+
+// Env returns the value of the environment variable key, or fallback if key is unset or empty.
+func Env(key, fallback string) string {
+
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+
+	return fallback
 }
