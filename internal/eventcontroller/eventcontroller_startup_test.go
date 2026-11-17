@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vparat/keda/internal/util"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
@@ -45,7 +46,7 @@ func TestEnv(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("KEDA_TEST_ENV", tt.value)
 
-			if got := env("KEDA_TEST_ENV", "default"); got != tt.want {
+			if got := util.Env("KEDA_TEST_ENV", "default"); got != tt.want {
 				t.Fatalf("env = %q, want %q", got, tt.want)
 			}
 

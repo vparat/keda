@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/vparat/keda/internal/util"
 )
 
 
@@ -228,7 +229,7 @@ func TestEnv(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("KEDA_TEST_ENV", tt.value)
 
-			if got := env("KEDA_TEST_ENV", "fallback"); got != tt.want {
+			if got := util.Env("KEDA_TEST_ENV", "fallback"); got != tt.want {
 				t.Fatalf("env = %q, want %q", got, tt.want)
 			}
 

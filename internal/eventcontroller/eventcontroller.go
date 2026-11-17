@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 
@@ -124,14 +123,6 @@ func parseConfig(data string) ([]Rule, error) {
 	return rules, nil
 }
 
-func env(key, fallback string) string {
-
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-
-	return fallback
-}
 
 // controller holds the external operations used by startup, reload, and dispatch.
 // Tests replace these operations on their own instance.
@@ -200,8 +191,8 @@ func (c *controller) run(ctx context.Context, client kubernetes.Interface) error
 	source := c.watchConfig
 	if source == nil {
 		var err error
-		cfg := configwatcher.NewConfig(env("CONFIGWATCHER_TYPE", defaultConfig))
-		sourceOptions := util.StringToMap(env("CONFIGWATCHER_SOURCE_OPTIONS", defaultConfigOptions))
+		cfg := configwatcher.NewConfig(util.Env("CONFIGWATCHER_TYPE", defaultConfig))
+		sourceOptions := util.StringToMap(util.Env("CONFIGWATCHER_SOURCE_OPTIONS", defaultConfigOptions))
 		if len(sourceOptions) == 0 {
 			return errors.New("invalid CONFIGWATCHER_SOURCE_OPTIONS")
 		}

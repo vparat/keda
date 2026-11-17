@@ -13,6 +13,7 @@ import (
 
 	"github.com/vparat/keda/internal/cache"
 	"github.com/vparat/keda/internal/eventcontroller"
+	"github.com/vparat/keda/internal/util"
 )
 
 // Version is the application version supplied at build time.
@@ -68,10 +69,10 @@ func version() bool {
 // using defaultTtl when the TTL is missing or invalid. It takes no arguments
 // and returns the configured cache or an error if cache creation fails.
 func buildCache() (cache.Cacher, error) {
-	ct := env("CACHE_TYPE", "")
-	host := env("CACHE_HOST", "")
+	ct := util.Env("CACHE_TYPE", "")
+	host := util.Env("CACHE_HOST", "")
 
-	ttl, err := time.ParseDuration(env("CACHE_TTL", ""))
+	ttl, err := time.ParseDuration(util.Env("CACHE_TTL", ""))
 	if err != nil {
 		slog.Error(fmt.Sprintf("Cannot parse cache ttl, using default: %d", defaultTtl), "error", err.Error())
 		ttl = defaultTtl
@@ -88,8 +89,8 @@ func buildCache() (cache.Cacher, error) {
 // configureLogger reads LOG_TYPE and LOG_LEVEL and installs the default logger.
 // It takes no arguments and returns no values.
 func configureLogger() {
-	loggerType := env("LOG_TYPE", "json")
-	logLevel := env("LOG_LEVEL", "info")
+	loggerType := util.Env("LOG_TYPE", "json")
+	logLevel := util.Env("LOG_LEVEL", "info")
 	level := slog.LevelInfo
 
 	switch strings.ToLower(logLevel) {
@@ -108,12 +109,4 @@ func configureLogger() {
 
 	slog.SetDefault(slog.New(handler))
 	slog.Info("logger configured", "type", loggerType, "configured_level", level.String())
-}
-
-func env(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-
-	return fallback
 }
