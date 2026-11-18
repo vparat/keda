@@ -28,7 +28,7 @@ The controller uses in-cluster Kubernetes credentials. Run it as a Pod with a se
 
 ### Run locally with kind
 
-The [no-cache example](kubernetes/deployments/kind-no-cache.yaml) includes a service account, permissions, a Deployment, and a ConfigMap containing sample rules.
+The [no-cache example](kubernetes/deployments/kind-no-cache.yaml) creates the `keda` namespace and includes a service account, permissions, a Deployment, and a ConfigMap containing sample rules. The rules watch `default`.
 
 These example permissions grant `cluster-admin` and are intended for local testing. See [Deployment and permissions](#deployment-and-permissions) before adapting them for a shared cluster.
 
@@ -44,8 +44,8 @@ kind load docker-image keda:local
 sed 's|image: keda:.*|image: keda:local|' \
   kubernetes/deployments/kind-no-cache.yaml | kubectl apply -f -
 
-kubectl rollout status deployment/keda -n default
-kubectl logs -f deployment/keda -n default
+kubectl rollout status deployment/keda -n keda
+kubectl logs -f deployment/keda -n keda
 ```
 
 In another terminal, trigger a sample ConfigMap rule:
@@ -117,9 +117,9 @@ The container includes `kubectl` and `jq`. Commands that access Kubernetes use t
 ## Rule configuration
 
 The ConfigMap deployment examples set `CONFIGWATCHER_SOURCE_OPTIONS` to
-`namespace:default,name:keda-config,key:config.yaml`, which reads the `config.yaml`
-key of ConfigMap `default/keda-config`. These are also the default options when the environment
-variable is unset or empty:
+`namespace:keda,name:keda-config,key:config.yaml`, which reads the `config.yaml`
+key of ConfigMap `keda/keda-config`. When the environment variable is unset or empty,
+the application reads `default/keda-config`:
 
 ```yaml
 apiVersion: v1
@@ -208,7 +208,7 @@ Optional Redis or Memcached caching suppresses events whose resource version alr
 | Redis | Stores resource versions in Redis with the configured TTL. |
 | Memcached | Stores resource versions in Memcached with the configured TTL. |
 
-The [Redis deployment example](kubernetes/deployments/kind-redis.yaml) expects a reachable backend at `redis-service:6379`. Provision the backend separately or change `CACHE_HOST`.
+The [Redis deployment example](kubernetes/deployments/kind-redis.yaml) expects a reachable backend at `redis-service.default:6379`. Provision the backend separately or change `CACHE_HOST`.
 
 Cache failures allow events through. Cache entries are written before action completion, so they do not track successful execution. Cache reads and writes are separate operations; a shared cache does not guarantee exactly-once execution across replicas. Command concurrency limits and active-job tracking are local to each process.
 
@@ -336,7 +336,7 @@ Edit the embedded allowlist before applying the manifest to include every
 required deployment. Keep `keda` and `redis` listed when these are the controller
 and Redis deployment names. The image needs Bash and kubectl; rebuild and load
 the image into kind with the tag specified by the manifest. Redis must be reachable
-at `redis-service:6379`.
+at `redis-service.default:6379`.
 
 The ConfigMap embeds [internal/scripts/check-allowed-deployment.sh](internal/scripts/check-allowed-deployment.sh)
 under the plural filename `check-allowed-deployments.sh`. Keep the source script
@@ -399,7 +399,7 @@ malformed options fail startup; explicit ConfigMap options require all three fie
 
 [kind-file-watcher.yaml](kubernetes/deployments/kind-file-watcher.yaml)
 uses `CONFIGWATCHER_TYPE=file` and reads `/home/config/config.yaml` from the
-`default/keda-config` Secret. The Secret contains the example event rules in
+`keda/keda-config` Secret. The Secret contains the example event rules in
 `stringData.config.yaml`. Its volume mounts the entire `/home/config` directory
 read-only so projected Secret updates reach the file watcher through symlink
 swaps. The rules file is readable by the container's non-root user.
