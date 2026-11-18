@@ -53,7 +53,7 @@ func TestCreateAndRun(t *testing.T) {
 
 	select {
 	case got := <-messages:
-		want := Message{Key: "pod-created", Name: "example", Namespace: "default"}
+		want := Message{Key: "pod-created", Name: "example", Namespace: "default", InitialList: true}
 
 		if got != want {
 			t.Fatalf("message = %+v, want %+v", got, want)

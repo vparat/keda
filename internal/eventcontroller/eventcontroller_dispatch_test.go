@@ -137,7 +137,8 @@ func startDispatch(
 }
 
 
-// TestRunRulesNilAction checks no-op dispatch and resource log attributes.
+// TestRunRulesNilAction checks that only live events dispatch a no-op action.
+// It takes the test handle and returns no values.
 func TestRunRulesNilAction(t *testing.T) {
 	records := captureDispatchLogs(t)
 	rule := Rule{
@@ -150,6 +151,7 @@ func TestRunRulesNilAction(t *testing.T) {
 
 		return nil, errors.New("unexpected command")
 	})
+	input <- informers.Message{Key: "pods", Name: "existing", Namespace: "default", InitialList: true}
 	input <- informers.Message{Key: "pods", Name: "one", Namespace: "default"}
 	record := expectDispatchLog(t, records, "nil action triggered")
 

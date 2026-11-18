@@ -202,6 +202,8 @@ Running commands are canceled on rule reload or shutdown. Command failures and c
 
 Optional Redis or Memcached caching suppresses events whose resource version already matches the cached value. Cache keys distinguish resource kind, action, name, namespace, and rule. Update callbacks also ignore unchanged resource versions during informer resyncs.
 
+Startup and configuration reload register rules and establish the initial resource state. Rule actions run only for matching events after that initial snapshot.
+
 | Backend | Behavior |
 | --- | --- |
 | No-op | Discards cache writes; suitable for local testing or when persistent deduplication is unnecessary. |
@@ -284,7 +286,6 @@ When contributing, add tests for behavioral changes, update configuration exampl
 | `failed to get in-cluster config` | Run the controller inside Kubernetes with service account credentials available. |
 | Configuration fails at startup | Check source type and options, ConfigMap location or file path and permissions, and YAML content. |
 | Rules do not react to changes | Check enabled rules, singular resource names, namespace/label selectors, and watch permissions. |
-| Existing resources trigger commands at startup | Create rules receive the informer's initial resource list. Use idempotent commands. |
 | A repeated event is skipped | Check resource-version cache entries and whether the same job is queued or running. |
 | Commands cannot acquire slots | Review command duration, the concurrency limit, and slot-acquisition timeout. |
 | A command is missing or fails | Verify the executable exists in the image and inspect logged command output. |
