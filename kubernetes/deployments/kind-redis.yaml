@@ -1,9 +1,14 @@
 ---
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: keda
+---
+apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: keda-sa
-  namespace: default
+  namespace: keda
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
@@ -12,7 +17,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: keda-sa
-    namespace: default
+    namespace: keda
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -22,7 +27,7 @@ kind: Deployment
 apiVersion: apps/v1
 metadata:
   name: keda
-  namespace: default
+  namespace: keda
   labels:
     k8s-app: keda
     app.kubernetes.io/name: keda
@@ -45,12 +50,11 @@ spec:
         - name: keda
           image: keda:0ee3b8e
           imagePullPolicy: Never
-          # command: [ "tail","-f","/dev/null"]
           env:
             - name: CONFIGWATCHER_TYPE
               value: "configmap"
             - name: CONFIGWATCHER_SOURCE_OPTIONS
-              value: "name:keda-config,namespace:default,key:config.yaml"
+              value: "name:keda-config,namespace:keda,key:config.yaml"
             - name: RESYNC_TIME_DURATION
               value: "1440m"
             - name: CLUSTER_NAME
@@ -66,7 +70,7 @@ spec:
             - name: "CACHE_TTL"
               value: "14400m"
             - name: "CACHE_HOST"
-              value: "redis-service:6379"
+              value: "redis-service.default:6379"
           resources:
             requests:
               cpu: 10m
@@ -81,7 +85,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: keda-config
-  namespace: default
+  namespace: keda
 data:
   config.yaml: |
     events:
