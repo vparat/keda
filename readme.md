@@ -119,14 +119,14 @@ The container includes `kubectl` and `jq`. Commands that access Kubernetes use t
 The ConfigMap deployment examples set `CONFIGWATCHER_SOURCE_OPTIONS` to
 `namespace:keda,name:keda-config,key:config.yaml`, which reads the `config.yaml`
 key of ConfigMap `keda/keda-config`. When the environment variable is unset or empty,
-the application reads `default/keda-config`:
+the application reads `keda/keda-config`:
 
 ```yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: keda-config
-  namespace: default
+  namespace: keda
 data:
   config.yaml: |
     events:
