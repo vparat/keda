@@ -20,11 +20,12 @@ const resync = 10 * time.Minute
 
 var dataStore datacache.Cacher
 
-// Message is emitted when an informer observes a change.
+// Message identifies a resource observed by an informer.
 type Message struct {
-	Key       string
-	Name      string
-	Namespace string
+	Key         string
+	Name        string
+	Namespace   string
+	InitialList bool // The resource came from the startup snapshot.
 }
 
 // kindToGVR maps supported resource kinds to their API resources.
@@ -184,7 +185,7 @@ func runInformer(
 	name string,
 	out chan<- Message,
 ) error {
-	emit := func(obj any) {
+	emit := func(obj any, initialList bool) {
 
 		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 			obj = tombstone.Obj
@@ -196,8 +197,13 @@ func runInformer(
 		}
 
 		key := fmt.Sprintf("%s:%s:%s:%s:%s", kind, action, string(object.GetName()), string(object.GetNamespace()), name)
-		if proceed(ctx, key, string(object.GetResourceVersion())) {
-			msg := Message{Key: name, Name: object.GetName(), Namespace: object.GetNamespace()}
+		if initialList || proceed(ctx, key, string(object.GetResourceVersion())) {
+			msg := Message{
+				Key:         name,
+				Name:        object.GetName(),
+				Namespace:   object.GetNamespace(),
+				InitialList: initialList,
+			}
 
 			select {
 			case out <- msg:
@@ -206,7 +212,7 @@ func runInformer(
 		}
 
 	}
-	handler := cache.ResourceEventHandlerFuncs{}
+	handler := cache.ResourceEventHandlerDetailedFuncs{}
 
 	switch strings.ToLower(action) {
 	case "create":
@@ -221,12 +227,14 @@ func runInformer(
 			}
 
 			if old.GetResourceVersion() != next.GetResourceVersion() {
-				emit(newObj)
+				emit(newObj, false)
 			}
 
 		}
 	case "delete":
-		handler.DeleteFunc = emit
+		handler.DeleteFunc = func(obj any) {
+			emit(obj, false)
+		}
 	default:
 		return fmt.Errorf("invalid action: %q", action)
 	}

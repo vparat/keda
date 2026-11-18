@@ -333,6 +333,11 @@ func (c *controller) runRules(ctx context.Context, client kubernetes.Interface, 
 		case <-ctx.Done():
 			return
 		case msg := <-messages:
+
+			if msg.InitialList {
+				continue
+			}
+
 			rule := byName[msg.Key]
 			eventLogger := logger.With(
 				"event",
