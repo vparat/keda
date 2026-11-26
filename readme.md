@@ -7,7 +7,6 @@ Use it for lightweight operational automation: recording resource changes, invok
 ## Contents
 
 - [Getting started](#getting-started)
-- [Use cases](#use-cases)
 - [Rule configuration](#rule-configuration)
 - [Environment variables](#environment-variables)
 - [Execution and caching](#execution-and-caching)
@@ -37,7 +36,7 @@ These example permissions grant `cluster-admin` and are intended for local testi
 kind create cluster
 
 # Build and load a local image.
-docker build -t keda:local .
+docker build --build-arg alpine_version=3.24 -t keda:local .
 kind load docker-image keda:local
 
 # Replace the example's fixed image tag and apply it.
@@ -55,62 +54,7 @@ kubectl create configmap keda-demo --from-literal=message=hello -n default
 kubectl delete configmap keda-demo -n default
 ```
 
-The sample rules log command output for resource creation and deletion. Initial informer synchronization also emits create events for resources that already exist.
-
-## Use cases
-
-### Record deployment changes
-
-Use a log-only action to observe deployment updates without running a command:
-
-```yaml
-events:
-  - name: observe-deployment-updates
-    inbound:
-      kind: deployment
-      action: update
-      namespace: default
-      label: app=my-app
-    outbound:
-      kind: nil
-```
-
-Updates include status changes as well as specification changes. A rule does not distinguish rollout completion from other updates.
-
-### Invoke a configuration refresh script
-
-React to changes in selected ConfigMaps:
-
-```yaml
-events:
-  - name: refresh-application-config
-    inbound:
-      kind: configmap
-      action: update
-      namespace: default
-      label: automation=refresh
-    outbound:
-      kind: cmd
-      action: /opt/scripts/refresh-config.sh
-```
-
-Package or mount the executable script into the keda container. It receives the resource name as its first argument and namespace as its second. The command runs in the controller container, not in the changed resource's Pod.
-
-### Run a fixed maintenance command
-
-End a command with `;` when it should run without appended resource arguments:
-
-```yaml
-events:
-  - name: inspect-services-after-delete
-    inbound:
-      kind: service
-      action: delete
-      namespace: default
-    outbound:
-      kind: command
-      action: "kubectl get services -n default;"
-```
+## Container tools
 
 The container includes `kubectl` and `jq`. Commands that access Kubernetes use the controller's service account permissions.
 
@@ -119,7 +63,7 @@ The container includes `kubectl` and `jq`. Commands that access Kubernetes use t
 The ConfigMap deployment examples set `CONFIGWATCHER_SOURCE_OPTIONS` to
 `namespace:keda,name:keda-config,key:config.yaml`, which reads the `config.yaml`
 key of ConfigMap `keda/keda-config`. When the environment variable is unset or empty,
-the application reads `keda/keda-config`:
+the application reads `config.yaml` from `keda/keda-config`:
 
 ```yaml
 apiVersion: v1
@@ -163,9 +107,9 @@ The complete list and API versions are defined in [`kindToGVR`](internal/informe
 
 ### Reload behavior
 
-- The selected ConfigMap or file must exist and contain valid, nonempty rules at startup.
+- The selected ConfigMap or file must exist and contain a nonblank, valid configuration at startup. An explicit `events: []` is valid and disables all rules, including on reload.
 - Valid configuration updates replace the active rules automatically.
-- Invalid or empty updates are logged; the previous rules remain active. Unchanged contents do not restart rules.
+- Invalid or blank updates are logged; the previous rules remain active. Unchanged contents do not restart rules.
 - Deleting the ConfigMap or watched file keeps the active rules until valid configuration is recreated.
 - An unexpected source stream closure stops the controller; cancellation joins its active workers.
 - Identical inbound/outbound rules collapse to the first entry, regardless of name. Kind/action casing, label ordering, command aliases, and surrounding command whitespace are normalized.
@@ -195,6 +139,11 @@ Invalid or nonpositive command concurrency settings log a warning and use their 
 ### Command lifecycle
 
 Commands share a process-wide concurrency limit enforced by a semaphore. Repeated work for the same rule, resource name, and namespace is skipped while that work is queued or running. The reservation is released after completion, failure, or slot-acquisition timeout.
+Concurrency is configurable via the following environment variables:
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CMDRUNNER_SEMAPHORE_MAX` | `5` | Maximum concurrent commands across rules in one process. |
+| `CMDRUNNER_SEMAPHORE_TIMEOUT` | `5m` | Maximum wait for a command slot; not a command execution timeout. |
 
 Running commands are canceled on rule reload or shutdown. Command failures and combined stdout/stderr are logged. There is no configured automatic command retry; write actions to tolerate repeated events.
 
@@ -252,7 +201,7 @@ go tool cover -func=cover.out
 | `make lint` | Run `golangci-lint` when installed. |
 | `make image` | Tidy/vendor dependencies, build an image tagged with the current commit, and remove `vendor`. |
 | `make image-gcloud` | Build the commit-tagged image with the Google Cloud CLI using `Dockerfile-gcloud`. |
-| `make kind-load-image` | Build and load the commit-tagged image into the default kind cluster, then update the KEDA image tags in `kubernetes/deployments/`. |
+| `make kind-load-image` | Build and load the commit-tagged image into the default kind cluster, then update the keda image tags in `kubernetes/deployments/`. |
 | `make clean` | Remove the binary, `vendor`, and `cover.out` when present. |
 | `make clean-images` | List and remove local `keda` image tags. |
 
@@ -296,7 +245,7 @@ When contributing, add tests for behavioral changes, update configuration exampl
 
 ### Pub/Sub script mount
 
-`kubernetes/deployments/kind-redis-pubsub.yaml` includes the `keda-pub-sub-scripts` ConfigMap and mounts it read-only at `/home/scripts`, with executable permissions. The script is available as `/home/scripts/pub-sub-send.sh` and accepts `<kind> <topic> <name> <namespace>` as positional arguments. All four arguments must be nonempty; KEDA rules supply kind and topic, then KEDA appends name and namespace. The script uses strict Bash error handling and `jq` to encode the JSON payload. The container image must include Bash, `jq`, and the `gcloud` CLI; provide suitable Google Cloud credentials at runtime.
+`kubernetes/deployments/kind-redis-pubsub.yaml` includes the `keda-pub-sub-scripts` ConfigMap and mounts it read-only at `/home/scripts`, with executable permissions. The script is available as `/home/scripts/pub-sub-send.sh` and accepts `<kind> <topic> <name> <namespace>` as positional arguments. All four arguments must be nonempty; keda rules supply kind and topic, then keda appends name and namespace. The script uses strict Bash error handling and `jq` to encode the JSON payload. The container image must include Bash, `jq`, and the `gcloud` CLI; provide suitable Google Cloud credentials at runtime.
 
 The ConfigMap embeds `internal/scripts/pub-sub-send.sh`; keep its contents in sync when changing the source script.
 
@@ -305,8 +254,7 @@ The ConfigMap embeds `internal/scripts/pub-sub-send.sh`; keep its contents in sy
 The [deployment allowlist example](kubernetes/deployments/kind-redis-allowed-deployments.yaml)
 mounts `check-allowed-deployments.sh` from the `keda-allowed-deployment-scripts`
 ConfigMap at `/home/scripts`, read-only with executable permissions (`0555`).
-Its rule checks deployment-create events in `default`, including deployments
-found at startup:
+Its rule checks Deployments created in `default` after the initial informer snapshot:
 
 ```yaml
 events:
@@ -320,7 +268,7 @@ events:
       action: '/home/scripts/check-allowed-deployments.sh deployment'
 ```
 
-The script accepts `<kind> <name> <namespace>`. KEDA appends the resource name
+The script accepts `<kind> <name> <namespace>`. keda appends the resource name
 and namespace, so an event for `my-app` in `default` runs:
 
 ```sh
